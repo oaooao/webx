@@ -64,8 +64,11 @@ var tweetDetailFeatures = map[string]bool{
 //
 // Uses backends.NewUTLSClient() for Chrome TLS fingerprinting (see tlsclient.go
 // for HTTP/2 ALPN handling).
+// sharedClient is reused across requests to avoid repeated TLS handshakes.
+var sharedClient = backends.NewUTLSClient()
+
 func FetchTweetDetail(tweetID string, auth *Auth) (json.RawMessage, error) {
-	client := backends.NewUTLSClient()
+	client := sharedClient
 
 	variables := tweetDetailVariables{
 		FocalTweetID:                           tweetID,
@@ -152,7 +155,8 @@ func FetchTweetDetail(tweetID string, auth *Auth) (json.RawMessage, error) {
 		reader = gzr
 	}
 
-	body, err := io.ReadAll(reader)
+	const maxTwitterBody = 10 * 1024 * 1024 // 10 MB
+	body, err := io.ReadAll(io.LimitReader(reader, maxTwitterBody))
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to read response body: "+err.Error())
 	}

@@ -1,6 +1,7 @@
 package backends
 
 import (
+	"compress/gzip"
 	"context"
 	"fmt"
 	"io"
@@ -65,7 +66,19 @@ func FetchHTML(rawURL string) (string, error) {
 		// We still read the body below to check for CF markers.
 	}
 
-	limited := io.LimitReader(resp.Body, maxBodyBytes)
+	// Decompress if server returned gzip (auto-decompression is disabled when
+	// using a custom DialTLSContext transport like our utls client).
+	var reader io.Reader = resp.Body
+	if strings.EqualFold(resp.Header.Get("Content-Encoding"), "gzip") {
+		gzr, gzErr := gzip.NewReader(resp.Body)
+		if gzErr != nil {
+			return "", types.NewWebxError(types.ErrFetchFailed, fmt.Sprintf("gzip decode: %s", gzErr))
+		}
+		defer gzr.Close()
+		reader = gzr
+	}
+
+	limited := io.LimitReader(reader, maxBodyBytes)
 	body, err := io.ReadAll(limited)
 	if err != nil {
 		return "", types.NewWebxError(types.ErrFetchFailed, fmt.Sprintf("read body: %s", err))

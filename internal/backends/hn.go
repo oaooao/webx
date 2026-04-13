@@ -58,7 +58,7 @@ func FetchHNItem(itemID string) (*HNItem, error) {
 		return nil, types.NewWebxError(types.ErrFetchFailed, "HN Algolia API HTTP "+resp.Status)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrFetchFailed, err.Error())
 	}

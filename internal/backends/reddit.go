@@ -144,7 +144,7 @@ func doRedditFetch(jsonURL string) ([]RedditListing, error) {
 		return nil, types.NewWebxError(types.ErrFetchFailed, "Reddit HTTP "+resp.Status)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrFetchFailed, err.Error())
 	}

@@ -30,7 +30,7 @@ func (a *redditAdapter) Kinds() []types.WebxKind {
 // Match returns true for all reddit.com subdomains (www, old, new, etc.).
 func (a *redditAdapter) Match(ctx types.MatchContext) bool {
 	host := ctx.URL.Hostname()
-	return strings.HasSuffix(host, "reddit.com")
+	return host == "reddit.com" || strings.HasSuffix(host, ".reddit.com")
 }
 
 func extractPostID(path string) string {
