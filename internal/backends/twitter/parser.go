@@ -11,8 +11,10 @@ type Tweet struct {
 	Metrics        map[string]int `json:"metrics,omitempty"`
 	QuotedTweet    *Tweet         `json:"quoted_tweet,omitempty"`
 	Media          []Media        `json:"media,omitempty"`
-	IsNoteTweet    bool           `json:"is_note_tweet"`
-	ConversationID string         `json:"conversation_id"`
+	IsNoteTweet      bool           `json:"is_note_tweet"`
+	ConversationID   string         `json:"conversation_id"`
+	InReplyToID      string         `json:"in_reply_to_id,omitempty"`
+	InReplyToUser    string         `json:"in_reply_to_user,omitempty"`
 }
 
 // Author holds the tweet author's display name and handle.
@@ -321,6 +323,8 @@ func parseLegacyIntoTweet(legacy map[string]json.RawMessage, tweet *Tweet) {
 	tweet.Text = jsonString(legacy["full_text"])
 	tweet.CreatedAt = jsonString(legacy["created_at"])
 	tweet.ConversationID = jsonString(legacy["conversation_id_str"])
+	tweet.InReplyToID = jsonString(legacy["in_reply_to_status_id_str"])
+	tweet.InReplyToUser = jsonString(legacy["in_reply_to_screen_name"])
 
 	tweet.Metrics = make(map[string]int)
 	for _, key := range []string{"favorite_count", "retweet_count", "reply_count", "quote_count", "bookmark_count"} {
