@@ -4,27 +4,27 @@ import "encoding/json"
 
 // Tweet is the parsed domain model for a single tweet.
 type Tweet struct {
-	ID             string
-	Text           string
-	Author         Author
-	CreatedAt      string
-	Metrics        map[string]int
-	QuotedTweet    *Tweet
-	Media          []Media
-	IsNoteTweet    bool
-	ConversationID string
+	ID             string         `json:"id"`
+	Text           string         `json:"text"`
+	Author         Author         `json:"author"`
+	CreatedAt      string         `json:"created_at"`
+	Metrics        map[string]int `json:"metrics,omitempty"`
+	QuotedTweet    *Tweet         `json:"quoted_tweet,omitempty"`
+	Media          []Media        `json:"media,omitempty"`
+	IsNoteTweet    bool           `json:"is_note_tweet"`
+	ConversationID string         `json:"conversation_id"`
 }
 
 // Author holds the tweet author's display name and handle.
 type Author struct {
-	Name       string
-	ScreenName string
+	Name       string `json:"name"`
+	ScreenName string `json:"screen_name"`
 }
 
 // Media represents a photo, video, or animated GIF attached to a tweet.
 type Media struct {
-	Type string // "photo", "video", "animated_gif"
-	URL  string
+	Type string `json:"type"` // "photo", "video", "animated_gif"
+	URL  string `json:"url"`
 }
 
 // ParseTweetDetailResponse extracts tweets from the deeply nested TweetDetail

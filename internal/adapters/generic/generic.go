@@ -13,7 +13,7 @@ const adapterID = "generic-article"
 type genericAdapter struct{}
 
 // New returns a new generic article adapter.
-func New() types.Adapter {
+func New() types.ExtractableAdapter {
 	return &genericAdapter{}
 }
 
@@ -91,6 +91,84 @@ func (a *genericAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult
 	return &types.NormalizedReadResult{
 		Title:         ptrOf(title),
 		Markdown:      ptrOf(jinaResult.Markdown),
+		Backend:       "jina",
+		FallbackDepth: 1,
+	}, nil
+}
+
+// ArticleExtractData is the structured metadata returned by Extract.
+type ArticleExtractData struct {
+	Title       string `json:"title,omitempty"`
+	Author      string `json:"author,omitempty"`
+	SiteName    string `json:"site_name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Published   string `json:"published,omitempty"`
+}
+
+func (a *genericAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtractResult, error) {
+	rawURL := ctx.URL.String()
+
+	// --- attempt 1: defuddle ---
+	defResult, err := backends.RunDefuddle(rawURL)
+	if err == nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "backend.defuddle",
+			Reason:  types.TraceRouteMatch,
+			Adapter: adapterID,
+			Backend: "defuddle",
+			Detail:  "defuddle succeeded",
+		})
+		return &types.NormalizedExtractResult{
+			Title:    ptrOf(defResult.Title),
+			Markdown: ptrOf(defResult.Markdown),
+			HTML:     ptrOf(defResult.HTML),
+			Data: ArticleExtractData{
+				Title:       defResult.Title,
+				Author:      defResult.Author,
+				SiteName:    defResult.SiteName,
+				Description: defResult.Description,
+				Published:   defResult.Published,
+			},
+			Backend:       "defuddle",
+			FallbackDepth: 0,
+		}, nil
+	}
+
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "backend.defuddle",
+		Reason:  types.TraceReasonFromError(err),
+		Adapter: adapterID,
+		Backend: "defuddle",
+		Detail:  err.Error(),
+	})
+
+	// --- attempt 2: jina fallback ---
+	jinaResult, jinaErr := backends.FetchViaJina(rawURL)
+	if jinaErr != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "backend.jina",
+			Reason:  types.TraceReasonFromError(jinaErr),
+			Adapter: adapterID,
+			Backend: "jina",
+			Detail:  jinaErr.Error(),
+		})
+		return nil, jinaErr
+	}
+
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "backend.jina",
+		Reason:  types.TraceRouteMatch,
+		Adapter: adapterID,
+		Backend: "jina",
+		Detail:  "jina fallback succeeded",
+	})
+
+	return &types.NormalizedExtractResult{
+		Title:    ptrOf(jinaResult.Title),
+		Markdown: ptrOf(jinaResult.Markdown),
+		Data: ArticleExtractData{
+			Title: jinaResult.Title,
+		},
 		Backend:       "jina",
 		FallbackDepth: 1,
 	}, nil

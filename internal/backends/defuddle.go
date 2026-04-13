@@ -10,9 +10,13 @@ import (
 
 // DefuddleResult holds the output of a successful defuddle parse.
 type DefuddleResult struct {
-	Title    string
-	Markdown string
-	HTML     string
+	Title       string
+	Markdown    string
+	HTML        string
+	Author      string
+	SiteName    string
+	Description string
+	Published   string
 }
 
 // RunDefuddle fetches the given URL as HTML and extracts main content using
@@ -52,8 +56,12 @@ func RunDefuddle(rawURL string) (*DefuddleResult, error) {
 	}
 
 	return &DefuddleResult{
-		Title:    result.Title,
-		Markdown: result.Markdown,
-		HTML:     result.Content,
+		Title:       result.Title,
+		Markdown:    result.Markdown,
+		HTML:        result.Content,
+		Author:      result.Author,
+		SiteName:    result.Site,
+		Description: result.Description,
+		Published:   result.Published,
 	}, nil
 }

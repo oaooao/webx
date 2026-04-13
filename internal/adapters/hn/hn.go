@@ -10,7 +10,7 @@ import (
 type hnAdapter struct{}
 
 // New returns a new Hacker News adapter.
-func New() types.Adapter {
+func New() types.ExtractableAdapter {
 	return &hnAdapter{}
 }
 
@@ -20,7 +20,7 @@ func (a *hnAdapter) ID() string { return "hacker-news" }
 func (a *hnAdapter) Priority() int { return 88 }
 
 func (a *hnAdapter) Kinds() []types.WebxKind {
-	return []types.WebxKind{types.KindArticle, types.KindComments, types.KindMetadata}
+	return []types.WebxKind{types.KindThread, types.KindArticle, types.KindComments, types.KindMetadata}
 }
 
 // Match returns true only for HN item URLs: https://news.ycombinator.com/item?id=<digits>
@@ -32,22 +32,8 @@ func (a *hnAdapter) Match(ctx types.MatchContext) bool {
 }
 
 func (a *hnAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
-	itemID := ctx.URL.Query().Get("id")
-	if itemID == "" {
-		return nil, types.NewWebxError(types.ErrNoMatch, "no HN item id in URL")
-	}
-
-	item, err := backends.FetchHNItem(itemID)
+	item, err := a.fetchItem(ctx)
 	if err != nil {
-		ctx.Trace.Push(types.TraceEvent{
-			Step:    "adapter.read",
-			Reason:  types.TraceReasonFromError(err),
-			Adapter: "hacker-news",
-			Backend: "hn_algolia",
-			Detail:  err.Error(),
-		})
-		// TODO(v1): fallback to go-defuddle on the original HN URL once defuddle
-		// backend is available from Phase 2. For now, surface the error directly.
 		return nil, err
 	}
 
@@ -72,10 +58,7 @@ func (a *hnAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, err
 		Detail:  fmt.Sprintf("HN Algolia returned %d top-level comments", len(item.Children)),
 	})
 
-	title := item.Title
-	if title == "" {
-		title = fmt.Sprintf("HN item %d", item.ID)
-	}
+	title := itemTitle(item)
 
 	return &types.NormalizedReadResult{
 		Title:    types.StringPtr(title),
@@ -83,4 +66,115 @@ func (a *hnAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, err
 		HTML:     nil,
 		Backend:  "hn_algolia",
 	}, nil
+}
+
+// HNExtractData is the structured data returned by Extract.
+type HNExtractData struct {
+	Story    HNStoryMeta   `json:"story"`
+	Comments []HNCommentNode `json:"comments"`
+}
+
+// HNStoryMeta holds the story-level metadata.
+type HNStoryMeta struct {
+	ID        int    `json:"id"`
+	Title     string `json:"title"`
+	URL       string `json:"url,omitempty"`
+	Author    string `json:"author"`
+	Points    *int   `json:"points,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+// HNCommentNode is a recursive comment tree node.
+type HNCommentNode struct {
+	ID        int             `json:"id"`
+	Author    string          `json:"author"`
+	Text      string          `json:"text,omitempty"`
+	CreatedAt string          `json:"created_at"`
+	Children  []HNCommentNode `json:"children,omitempty"`
+}
+
+func (a *hnAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtractResult, error) {
+	item, err := a.fetchItem(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	markdown := backends.RenderHNItemMarkdown(item)
+	title := itemTitle(item)
+
+	data := HNExtractData{
+		Story: HNStoryMeta{
+			ID:        item.ID,
+			Title:     item.Title,
+			URL:       item.URL,
+			Author:    item.Author,
+			Points:    item.Points,
+			CreatedAt: item.CreatedAt,
+		},
+		Comments: convertComments(item.Children),
+	}
+
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "adapter.extract",
+		Reason:  types.TraceRouteMatch,
+		Adapter: "hacker-news",
+		Backend: "hn_algolia",
+		Detail:  fmt.Sprintf("extracted story + %d top-level comments", len(item.Children)),
+	})
+
+	return &types.NormalizedExtractResult{
+		Title:    types.StringPtr(title),
+		Markdown: &markdown,
+		Data:     data,
+		Backend:  "hn_algolia",
+	}, nil
+}
+
+// fetchItem retrieves the HN item, handling validation and tracing.
+func (a *hnAdapter) fetchItem(ctx types.RunContext) (*backends.HNItem, error) {
+	itemID := ctx.URL.Query().Get("id")
+	if itemID == "" {
+		return nil, types.NewWebxError(types.ErrNoMatch, "no HN item id in URL")
+	}
+
+	item, err := backends.FetchHNItem(itemID)
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.read",
+			Reason:  types.TraceReasonFromError(err),
+			Adapter: "hacker-news",
+			Backend: "hn_algolia",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+	return item, nil
+}
+
+func itemTitle(item *backends.HNItem) string {
+	if item.Title != "" {
+		return item.Title
+	}
+	return fmt.Sprintf("HN item %d", item.ID)
+}
+
+func convertComments(items []backends.HNItem) []HNCommentNode {
+	if len(items) == 0 {
+		return nil
+	}
+	nodes := make([]HNCommentNode, len(items))
+	for i, c := range items {
+		text := ""
+		if c.Text != nil {
+			text = backends.StripHTMLTags(*c.Text)
+		}
+		nodes[i] = HNCommentNode{
+			ID:        c.ID,
+			Author:    c.Author,
+			Text:      text,
+			CreatedAt: c.CreatedAt,
+			Children:  convertComments(c.Children),
+		}
+	}
+	return nodes
 }

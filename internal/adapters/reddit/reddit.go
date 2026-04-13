@@ -11,10 +11,16 @@ import (
 
 var redditPostIDRe = regexp.MustCompile(`/comments/([a-zA-Z0-9]+)`)
 
+// RedditExtractData is the structured data returned by Extract.
+type RedditExtractData struct {
+	Post     backends.RedditPost          `json:"post"`
+	Comments []backends.RedditCommentNode `json:"comments"`
+}
+
 type redditAdapter struct{}
 
 // New returns a new Reddit adapter.
-func New() types.Adapter {
+func New() types.ExtractableAdapter {
 	return &redditAdapter{}
 }
 
@@ -41,11 +47,13 @@ func extractPostID(path string) string {
 	return m[1]
 }
 
-func (a *redditAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
+// fetchReddit is the shared core for Read and Extract. It fetches, parses,
+// and expands the Reddit thread.
+func (a *redditAdapter) fetchReddit(ctx types.RunContext, step string) (*backends.RedditResult, error) {
 	listings, err := backends.FetchRedditJSON(ctx.URL.String())
 	if err != nil {
 		ctx.Trace.Push(types.TraceEvent{
-			Step:    "adapter.read",
+			Step:    step,
 			Reason:  types.TraceReasonFromError(err),
 			Adapter: "reddit",
 			Backend: "reddit_json",
@@ -57,7 +65,7 @@ func (a *redditAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult,
 	result, parseErr := backends.ParseRedditListings(listings)
 	if parseErr != nil {
 		ctx.Trace.Push(types.TraceEvent{
-			Step:    "adapter.read",
+			Step:    step,
 			Reason:  types.TraceReasonFromError(parseErr),
 			Adapter: "reddit",
 			Backend: "reddit_json",
@@ -72,15 +80,24 @@ func (a *redditAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult,
 		backends.ExpandMoreComments(result, "t3_"+pid)
 	}
 
-	markdown := backends.RenderRedditMarkdown(result)
-
 	ctx.Trace.Push(types.TraceEvent{
-		Step:    "adapter.read",
+		Step:    step,
 		Reason:  types.TraceRouteMatch,
 		Adapter: "reddit",
 		Backend: "reddit_json",
 		Detail:  fmt.Sprintf("parsed %d top-level comments", len(result.Comments)),
 	})
+
+	return result, nil
+}
+
+func (a *redditAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
+	result, err := a.fetchReddit(ctx, "adapter.read")
+	if err != nil {
+		return nil, err
+	}
+
+	markdown := backends.RenderRedditMarkdown(result)
 
 	title := result.Post.Title
 	if title == "" {
@@ -91,6 +108,28 @@ func (a *redditAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult,
 		Title:    types.StringPtr(title),
 		Markdown: &markdown,
 		HTML:     nil,
+		Backend:  "reddit_json",
+	}, nil
+}
+
+func (a *redditAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtractResult, error) {
+	result, err := a.fetchReddit(ctx, "adapter.extract")
+	if err != nil {
+		return nil, err
+	}
+
+	markdown := backends.RenderRedditMarkdown(result)
+
+	title := result.Post.Title
+	if title == "" {
+		title = "Reddit Thread"
+	}
+
+	return &types.NormalizedExtractResult{
+		Title:    types.StringPtr(title),
+		Markdown: &markdown,
+		HTML:     nil,
+		Data:     RedditExtractData{Post: result.Post, Comments: result.Comments},
 		Backend:  "reddit_json",
 	}, nil
 }

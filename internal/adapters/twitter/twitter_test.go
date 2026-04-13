@@ -127,3 +127,10 @@ func TestAdapterMeta(t *testing.T) {
 		t.Error("Kinds should include KindMetadata")
 	}
 }
+
+func TestNewReturnsExtractableAdapter(t *testing.T) {
+	a := New()
+	if _, ok := a.(types.ExtractableAdapter); !ok {
+		t.Error("New() should return an ExtractableAdapter")
+	}
+}

@@ -16,8 +16,13 @@ var tweetIDRe = regexp.MustCompile(`/status/(\d+)(?:[/?#]|$)`)
 
 type twitterAdapter struct{}
 
+// TwitterExtractData is the structured data returned by Extract.
+type TwitterExtractData struct {
+	Tweets []twitterbe.Tweet `json:"tweets"`
+}
+
 // New returns a new Twitter adapter instance.
-func New() types.Adapter {
+func New() types.ExtractableAdapter {
 	return &twitterAdapter{}
 }
 
@@ -44,86 +49,114 @@ func tweetID(ctx types.MatchContext) string {
 	return m[1]
 }
 
-func (a *twitterAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
+// fetchTweets is the shared core for Read and Extract. It validates the URL,
+// authenticates, fetches and parses the tweet detail response.
+func (a *twitterAdapter) fetchTweets(ctx types.RunContext, step string) ([]twitterbe.Tweet, string, error) {
 	id := tweetID(ctx.MatchContext)
 	if id == "" {
 		ctx.Trace.Push(types.TraceEvent{
-			Step:    "adapter.read",
+			Step:    step,
 			Reason:  types.TraceNoMatch,
 			Adapter: "twitter",
 			Detail:  "URL does not contain a /status/<id> path: " + ctx.URL.String(),
 		})
-		return nil, types.NewWebxError(types.ErrNoMatch,
+		return nil, "", types.NewWebxError(types.ErrNoMatch,
 			"URL does not point to a tweet (no /status/<id> found): "+ctx.URL.String())
 	}
 
 	auth, err := twitterbe.LoadAuth()
 	if err != nil {
 		ctx.Trace.Push(types.TraceEvent{
-			Step:    "adapter.read",
+			Step:    step,
 			Reason:  types.TraceLoginRequired,
 			Adapter: "twitter",
 			Backend: "twitter_graphql",
 			Detail:  err.Error(),
 		})
-		return nil, err
+		return nil, "", err
 	}
 
 	raw, err := twitterbe.FetchTweetDetail(id, auth)
 	if err != nil {
 		reason := traceReason(err)
 		ctx.Trace.Push(types.TraceEvent{
-			Step:    "adapter.read",
+			Step:    step,
 			Reason:  reason,
 			Adapter: "twitter",
 			Backend: "twitter_graphql",
 			Detail:  err.Error(),
 		})
-		return nil, err
+		return nil, "", err
 	}
 
 	tweets, err := twitterbe.ParseTweetDetailResponse(raw)
 	if err != nil {
 		ctx.Trace.Push(types.TraceEvent{
-			Step:    "adapter.read",
+			Step:    step,
 			Reason:  types.TraceBackendFailed,
 			Adapter: "twitter",
 			Backend: "twitter_graphql",
 			Detail:  "parse error: " + err.Error(),
 		})
-		return nil, types.NewWebxError(types.ErrBackendFailed, "failed to parse Twitter response: "+err.Error())
+		return nil, "", types.NewWebxError(types.ErrBackendFailed, "failed to parse Twitter response: "+err.Error())
 	}
 
 	if len(tweets) == 0 {
 		ctx.Trace.Push(types.TraceEvent{
-			Step:    "adapter.read",
+			Step:    step,
 			Reason:  types.TraceEmptyContent,
 			Adapter: "twitter",
 			Backend: "twitter_graphql",
 			Detail:  "GraphQL response contained no tweet entries",
 		})
-		return nil, types.NewWebxError(types.ErrContentEmpty, "no tweets found in Twitter GraphQL response")
+		return nil, "", types.NewWebxError(types.ErrContentEmpty, "no tweets found in Twitter GraphQL response")
 	}
 
-	markdown := twitterbe.RenderMarkdown(tweets)
-
 	title := "Tweet"
-	if len(tweets) > 0 && tweets[0].Author.ScreenName != "" {
+	if tweets[0].Author.ScreenName != "" {
 		title = fmt.Sprintf("@%s on Twitter", tweets[0].Author.ScreenName)
 	}
 
 	ctx.Trace.Push(types.TraceEvent{
-		Step:    "adapter.read",
+		Step:    step,
 		Reason:  types.TraceRouteMatch,
 		Adapter: "twitter",
 		Backend: "twitter_graphql",
 		Detail:  fmt.Sprintf("parsed %d tweets from TweetDetail GraphQL response", len(tweets)),
 	})
 
+	return tweets, title, nil
+}
+
+func (a *twitterAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
+	tweets, title, err := a.fetchTweets(ctx, "adapter.read")
+	if err != nil {
+		return nil, err
+	}
+
+	markdown := twitterbe.RenderMarkdown(tweets)
+
 	return &types.NormalizedReadResult{
 		Title:    &title,
 		Markdown: &markdown,
 		HTML:     nil,
+		Backend:  "twitter_graphql",
+	}, nil
+}
+
+func (a *twitterAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtractResult, error) {
+	tweets, title, err := a.fetchTweets(ctx, "adapter.extract")
+	if err != nil {
+		return nil, err
+	}
+
+	markdown := twitterbe.RenderMarkdown(tweets)
+
+	return &types.NormalizedExtractResult{
+		Title:    &title,
+		Markdown: &markdown,
+		HTML:     nil,
+		Data:     TwitterExtractData{Tweets: tweets},
 		Backend:  "twitter_graphql",
 	}, nil
 }
