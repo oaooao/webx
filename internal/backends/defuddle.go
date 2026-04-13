@@ -45,8 +45,10 @@ func RunDefuddle(rawURL string) (*DefuddleResult, error) {
 			fmt.Sprintf("defuddle: parse failed: %s", err))
 	}
 
-	if result.Markdown == "" && result.Content == "" {
-		return nil, types.NewWebxError(types.ErrContentEmpty, "defuddle: extracted empty content")
+	// Treat near-empty content as failure: defuddle sometimes returns a
+	// bare <body></body> shell when fed compressed/garbled HTML.
+	if result.Markdown == "" && len(result.Content) < 50 {
+		return nil, types.NewWebxError(types.ErrContentEmpty, "defuddle: extracted empty or near-empty content")
 	}
 
 	return &DefuddleResult{
