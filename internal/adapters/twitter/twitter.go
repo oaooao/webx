@@ -6,6 +6,7 @@ package twitter
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 
 	twitterbe "github.com/oaooao/webx/internal/backends/twitter"
@@ -187,6 +188,151 @@ func (a *twitterAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtract
 		Data:     TwitterExtractData{Tweets: tweets},
 		Backend:  "twitter_graphql",
 	}, nil
+}
+
+// Post implements WritableAdapter — posts a new tweet.
+func (a *twitterAdapter) Post(ctx types.WriteContext) (*types.NormalizedWriteResult, error) {
+	auth, err := twitterbe.LoadAuth()
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.post",
+			Reason:  types.TraceLoginRequired,
+			Adapter: "twitter",
+			Backend: "twitter_graphql",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+
+	result, err := twitterbe.CreateTweet(ctx.Content, auth)
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.post",
+			Reason:  traceReason(err),
+			Adapter: "twitter",
+			Backend: "twitter_graphql",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "adapter.post",
+		Reason:  types.TraceRouteMatch,
+		Adapter: "twitter",
+		Backend: "twitter_graphql",
+		Detail:  fmt.Sprintf("tweet posted: %s", result.ResourceURL),
+	})
+	return result, nil
+}
+
+// Reply implements WritableAdapter — posts a reply to a tweet.
+func (a *twitterAdapter) Reply(ctx types.WriteContext) (*types.NormalizedWriteResult, error) {
+	auth, err := twitterbe.LoadAuth()
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.reply",
+			Reason:  types.TraceLoginRequired,
+			Adapter: "twitter",
+			Backend: "twitter_graphql",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+
+	// Extract tweet ID from target URL.
+	parsedURL, err := parseURL(ctx.TargetURL)
+	if err != nil || parsedURL == nil {
+		return nil, types.NewWebxError(types.ErrNoMatch, "invalid target URL for reply: "+ctx.TargetURL)
+	}
+	mc := types.MatchContext{URL: parsedURL}
+	inReplyToID := tweetID(mc)
+	if inReplyToID == "" {
+		return nil, types.NewWebxError(types.ErrNoMatch, "target URL does not point to a tweet: "+ctx.TargetURL)
+	}
+
+	result, err := twitterbe.ReplyTweet(ctx.Content, inReplyToID, auth)
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.reply",
+			Reason:  traceReason(err),
+			Adapter: "twitter",
+			Backend: "twitter_graphql",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "adapter.reply",
+		Reason:  types.TraceRouteMatch,
+		Adapter: "twitter",
+		Backend: "twitter_graphql",
+		Detail:  fmt.Sprintf("reply posted: %s", result.ResourceURL),
+	})
+	return result, nil
+}
+
+// React implements WritableAdapter — likes or retweets a tweet.
+// Supported reactions: "like", "retweet".
+func (a *twitterAdapter) React(ctx types.WriteContext) (*types.NormalizedWriteResult, error) {
+	auth, err := twitterbe.LoadAuth()
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.react",
+			Reason:  types.TraceLoginRequired,
+			Adapter: "twitter",
+			Backend: "twitter_graphql",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+
+	parsedURL, err := parseURL(ctx.TargetURL)
+	if err != nil || parsedURL == nil {
+		return nil, types.NewWebxError(types.ErrNoMatch, "invalid target URL for react: "+ctx.TargetURL)
+	}
+	mc := types.MatchContext{URL: parsedURL}
+	targetTweetID := tweetID(mc)
+	if targetTweetID == "" {
+		return nil, types.NewWebxError(types.ErrNoMatch, "target URL does not point to a tweet: "+ctx.TargetURL)
+	}
+
+	var result *types.NormalizedWriteResult
+	switch ctx.Reaction {
+	case "like":
+		result, err = twitterbe.FavoriteTweet(targetTweetID, auth)
+	case "retweet":
+		result, err = twitterbe.RetweetTweet(targetTweetID, auth)
+	default:
+		return nil, types.NewWebxError(types.ErrUnsupportedKind,
+			fmt.Sprintf("Twitter does not support reaction %q. Supported: like, retweet", ctx.Reaction))
+	}
+
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.react",
+			Reason:  traceReason(err),
+			Adapter: "twitter",
+			Backend: "twitter_graphql",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "adapter.react",
+		Reason:  types.TraceRouteMatch,
+		Adapter: "twitter",
+		Backend: "twitter_graphql",
+		Detail:  fmt.Sprintf("reaction %q applied to tweet %s", ctx.Reaction, targetTweetID),
+	})
+	return result, nil
+}
+
+// parseURL is a helper to parse a URL string; returns nil on error.
+func parseURL(rawURL string) (*url.URL, error) {
+	return url.Parse(rawURL)
 }
 
 // traceReason maps a WebxError code to the appropriate TraceReason.
