@@ -343,3 +343,159 @@ func RenderSearchMarkdown(result *types.NormalizedSearchResult) string {
 
 	return b.String()
 }
+
+// runWrite is the shared implementation for RunPost, RunReply, and RunReact.
+func runWrite(ctx types.WriteContext) types.WebxEnvelope {
+	trace := ctx.Trace
+	if trace == nil {
+		trace = types.NewTraceBuffer()
+		ctx.Trace = trace
+	}
+
+	var adapter types.Adapter
+
+	if ctx.Action == types.ActionPost {
+		// Post routes by platform ID.
+		adapter = FindAdapter(ctx.Platform)
+		if adapter == nil {
+			trace.Push(types.TraceEvent{
+				Step: "route", Reason: types.TraceNoMatch,
+				Detail: "No adapter found with ID: " + ctx.Platform,
+			})
+			return types.MakeEnvelope(types.EnvelopeInput{
+				OK: false, Kind: types.KindWrite, URL: "",
+				Adapter: ctx.Platform, Backend: "none",
+				Trace: trace.All(),
+				Error: &types.EnvelopeError{Code: string(types.ErrNoMatch), Message: "Unknown platform: " + ctx.Platform},
+			})
+		}
+	} else {
+		// Reply/React routes by target URL.
+		matchCtx, err := makeMatchContext(ctx.TargetURL, nil)
+		if err != nil {
+			trace.Push(types.TraceEvent{Step: "parse", Reason: types.TraceBackendFailed, Detail: err.Error()})
+			return types.MakeEnvelope(types.EnvelopeInput{
+				OK: false, Kind: types.KindWrite, URL: ctx.TargetURL,
+				Adapter: "none", Backend: "none",
+				Trace: trace.All(),
+				Error: &types.EnvelopeError{Code: string(types.ErrFetchFailed), Message: err.Error()},
+			})
+		}
+		adapter = Route(matchCtx)
+		if adapter == nil {
+			trace.Push(types.TraceEvent{
+				Step: "route", Reason: types.TraceNoMatch,
+				Detail: "No adapter matched URL: " + ctx.TargetURL,
+			})
+			return types.MakeEnvelope(types.EnvelopeInput{
+				OK: false, Kind: types.KindWrite, URL: ctx.TargetURL,
+				Adapter: "none", Backend: "none",
+				Trace: trace.All(),
+				Error: &types.EnvelopeError{Code: string(types.ErrNoMatch), Message: "No adapter matched URL: " + ctx.TargetURL},
+			})
+		}
+	}
+
+	writable, ok := adapter.(types.WritableAdapter)
+	if !ok {
+		trace.Push(types.TraceEvent{
+			Step:    "route",
+			Reason:  types.TraceNotImplemented,
+			Adapter: adapter.ID(),
+			Detail:  "Adapter does not implement write operations",
+		})
+		return types.MakeEnvelope(types.EnvelopeInput{
+			OK: false, Kind: types.KindWrite, URL: ctx.TargetURL,
+			Adapter: adapter.ID(), Backend: "none",
+			Trace: trace.All(),
+			Error: &types.EnvelopeError{Code: string(types.ErrUnsupportedKind), Message: adapter.ID() + " does not support write operations"},
+		})
+	}
+
+	trace.Push(types.TraceEvent{
+		Step:    "route",
+		Reason:  types.TraceRouteMatch,
+		Adapter: adapter.ID(),
+		Detail:  fmt.Sprintf("Matched writable adapter %s for %s", adapter.ID(), ctx.Action),
+	})
+
+	var result *types.NormalizedWriteResult
+	var writeErr error
+
+	switch ctx.Action {
+	case types.ActionPost:
+		result, writeErr = writable.Post(ctx)
+	case types.ActionReply:
+		result, writeErr = writable.Reply(ctx)
+	case types.ActionReact:
+		result, writeErr = writable.React(ctx)
+	default:
+		return types.MakeEnvelope(types.EnvelopeInput{
+			OK: false, Kind: types.KindWrite, URL: ctx.TargetURL,
+			Adapter: adapter.ID(), Backend: "none",
+			Trace: trace.All(),
+			Error: &types.EnvelopeError{Code: string(types.ErrBackendFailed), Message: "Unknown write action: " + string(ctx.Action)},
+		})
+	}
+
+	if writeErr != nil {
+		var wxErr *types.WebxError
+		code := string(types.ErrBackendFailed)
+		if errors.As(writeErr, &wxErr) {
+			code = string(wxErr.Code)
+		}
+		return types.MakeEnvelope(types.EnvelopeInput{
+			OK: false, Kind: types.KindWrite, URL: ctx.TargetURL,
+			Adapter: adapter.ID(), Backend: "error",
+			Trace: trace.All(),
+			Error: &types.EnvelopeError{Code: code, Message: writeErr.Error()},
+		})
+	}
+
+	markdown := fmt.Sprintf("**%s** completed on %s.\n", result.Action, adapter.ID())
+	if result.ResourceURL != "" {
+		markdown += fmt.Sprintf("\nURL: %s\n", result.ResourceURL)
+	}
+	if result.Message != "" {
+		markdown += fmt.Sprintf("\n%s\n", result.Message)
+	}
+
+	return types.MakeEnvelope(types.EnvelopeInput{
+		OK: true, Kind: types.KindWrite, URL: ctx.TargetURL,
+		Adapter:  adapter.ID(),
+		Backend:  result.Backend,
+		Markdown: &markdown,
+		Data:     result,
+		Trace:    trace.All(),
+	})
+}
+
+// RunPost executes a post operation on the specified platform.
+func RunPost(platform string, content string) types.WebxEnvelope {
+	return runWrite(types.WriteContext{
+		Action:   types.ActionPost,
+		Platform: platform,
+		Content:  content,
+		Trace:    types.NewTraceBuffer(),
+	})
+}
+
+// RunReply executes a reply operation targeting the specified URL.
+func RunReply(targetURL string, content string) types.WebxEnvelope {
+	return runWrite(types.WriteContext{
+		Action:    types.ActionReply,
+		TargetURL: targetURL,
+		Content:   content,
+		Trace:     types.NewTraceBuffer(),
+	})
+}
+
+// RunReact executes a reaction on the specified URL.
+func RunReact(targetURL string, reaction string) types.WebxEnvelope {
+	return runWrite(types.WriteContext{
+		Action:    types.ActionReact,
+		TargetURL: targetURL,
+		Reaction:  reaction,
+		Trace:     types.NewTraceBuffer(),
+	})
+}

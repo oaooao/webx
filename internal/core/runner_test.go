@@ -370,3 +370,171 @@ func containsSubstring(s, sub string) bool {
 	}
 	return false
 }
+
+// --- RunPost / RunReply / RunReact tests ---
+
+// writableAdapter is a mockAdapter that also implements WritableAdapter.
+type writableAdapter struct {
+	mockAdapter
+	postResult  *types.NormalizedWriteResult
+	postErr     error
+	replyResult *types.NormalizedWriteResult
+	replyErr    error
+	reactResult *types.NormalizedWriteResult
+	reactErr    error
+}
+
+func (w *writableAdapter) Post(ctx types.WriteContext) (*types.NormalizedWriteResult, error) {
+	if w.postErr != nil {
+		return nil, w.postErr
+	}
+	return w.postResult, nil
+}
+
+func (w *writableAdapter) Reply(ctx types.WriteContext) (*types.NormalizedWriteResult, error) {
+	if w.replyErr != nil {
+		return nil, w.replyErr
+	}
+	return w.replyResult, nil
+}
+
+func (w *writableAdapter) React(ctx types.WriteContext) (*types.NormalizedWriteResult, error) {
+	if w.reactErr != nil {
+		return nil, w.reactErr
+	}
+	return w.reactResult, nil
+}
+
+func TestRunPost_WhenPlatformNotFound_ShouldReturnError(t *testing.T) {
+	ResetRegistry()
+
+	env := RunPost("nonexistent", "Hello world!")
+	if env.OK {
+		t.Fatal("expected ok=false for unknown platform")
+	}
+	if env.Error.Code != string(types.ErrNoMatch) {
+		t.Fatalf("expected NO_MATCH, got %s", env.Error.Code)
+	}
+	if env.Kind != types.KindWrite {
+		t.Fatalf("expected kind=write, got %s", env.Kind)
+	}
+}
+
+func TestRunPost_WhenNotWritable_ShouldReturnError(t *testing.T) {
+	ResetRegistry()
+	adapter := &mockAdapter{id: "readonly", priority: 100, kinds: []types.WebxKind{types.KindArticle}, hostname: "example.com"}
+	RegisterAdapter(adapter)
+
+	env := RunPost("readonly", "Hello!")
+	if env.OK {
+		t.Fatal("expected ok=false when adapter doesn't support write")
+	}
+	if env.Error.Code != string(types.ErrUnsupportedKind) {
+		t.Fatalf("expected UNSUPPORTED_KIND, got %s", env.Error.Code)
+	}
+}
+
+func TestRunPost_WhenSuccess_ShouldReturnResult(t *testing.T) {
+	ResetRegistry()
+	adapter := &writableAdapter{
+		mockAdapter: mockAdapter{id: "test-write", priority: 100, kinds: []types.WebxKind{types.KindThread}, hostname: "example.com"},
+		postResult: &types.NormalizedWriteResult{
+			Success:     true,
+			Action:      "post",
+			ResourceURL: "https://example.com/post/123",
+			Message:     "Posted successfully",
+			Backend:     "mock_write",
+		},
+	}
+	RegisterAdapter(adapter)
+
+	env := RunPost("test-write", "Hello world!")
+	if !env.OK {
+		t.Fatalf("expected ok=true, got ok=false, error=%v", env.Error)
+	}
+	if env.Kind != types.KindWrite {
+		t.Fatalf("expected kind=write, got %s", env.Kind)
+	}
+	if env.Source.Adapter != "test-write" {
+		t.Fatalf("expected adapter=test-write, got %s", env.Source.Adapter)
+	}
+	if env.Source.Backend != "mock_write" {
+		t.Fatalf("expected backend=mock_write, got %s", env.Source.Backend)
+	}
+	if env.Data == nil {
+		t.Fatal("expected non-nil data")
+	}
+}
+
+func TestRunReply_WhenSuccess_ShouldRouteByURL(t *testing.T) {
+	ResetRegistry()
+	adapter := &writableAdapter{
+		mockAdapter: mockAdapter{id: "test-reply", priority: 100, kinds: []types.WebxKind{types.KindThread}, hostname: "example.com"},
+		replyResult: &types.NormalizedWriteResult{
+			Success:     true,
+			Action:      "reply",
+			ResourceURL: "https://example.com/post/123/reply/456",
+			Backend:     "mock_write",
+		},
+	}
+	RegisterAdapter(adapter)
+
+	env := RunReply("https://example.com/post/123", "Great post!")
+	if !env.OK {
+		t.Fatalf("expected ok=true, got ok=false, error=%v", env.Error)
+	}
+	if env.Source.Adapter != "test-reply" {
+		t.Fatalf("expected adapter=test-reply, got %s", env.Source.Adapter)
+	}
+}
+
+func TestRunReact_WhenSuccess_ShouldRouteByURL(t *testing.T) {
+	ResetRegistry()
+	adapter := &writableAdapter{
+		mockAdapter: mockAdapter{id: "test-react", priority: 100, kinds: []types.WebxKind{types.KindThread}, hostname: "example.com"},
+		reactResult: &types.NormalizedWriteResult{
+			Success: true,
+			Action:  "react",
+			Message: "Liked",
+			Backend: "mock_write",
+		},
+	}
+	RegisterAdapter(adapter)
+
+	env := RunReact("https://example.com/post/123", "like")
+	if !env.OK {
+		t.Fatalf("expected ok=true, got ok=false, error=%v", env.Error)
+	}
+	if env.Source.Adapter != "test-react" {
+		t.Fatalf("expected adapter=test-react, got %s", env.Source.Adapter)
+	}
+}
+
+func TestRunReply_WhenNoMatchingAdapter_ShouldReturnError(t *testing.T) {
+	ResetRegistry()
+
+	env := RunReply("https://unknown.example.com/post/123", "reply text")
+	if env.OK {
+		t.Fatal("expected ok=false for unmatched URL")
+	}
+	if env.Error.Code != string(types.ErrNoMatch) {
+		t.Fatalf("expected NO_MATCH, got %s", env.Error.Code)
+	}
+}
+
+func TestRunPost_WhenWriteError_ShouldReturnErrorEnvelope(t *testing.T) {
+	ResetRegistry()
+	adapter := &writableAdapter{
+		mockAdapter: mockAdapter{id: "failing-write", priority: 100, kinds: []types.WebxKind{types.KindThread}, hostname: "example.com"},
+		postErr:     types.NewWebxError(types.ErrRateLimited, "slow down"),
+	}
+	RegisterAdapter(adapter)
+
+	env := RunPost("failing-write", "spam")
+	if env.OK {
+		t.Fatal("expected ok=false when write returns error")
+	}
+	if env.Error.Code != string(types.ErrRateLimited) {
+		t.Fatalf("expected RATE_LIMITED, got %s", env.Error.Code)
+	}
+}
