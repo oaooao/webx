@@ -1,6 +1,7 @@
 package youtube
 
 import (
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/oaooao/webx/internal/backends"
 	"github.com/oaooao/webx/internal/types"
@@ -100,9 +102,27 @@ func extractPlayerResponse(pageHTML string) ([]byte, error) {
 
 	start := loc[1] // right after "var ytInitialPlayerResponse = "
 	depth := 0
+	inString := false
+	escaped := false
 	end := -1
 	for i := start; i < len(pageHTML); i++ {
-		switch pageHTML[i] {
+		ch := pageHTML[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if ch == '\\' && inString {
+			escaped = true
+			continue
+		}
+		if ch == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		switch ch {
 		case '{':
 			depth++
 		case '}':
@@ -218,7 +238,14 @@ type xmlTextNode struct {
 }
 
 func fetchTranscript(captionURL string) ([]TranscriptSegment, error) {
-	resp, err := http.Get(captionURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, captionURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

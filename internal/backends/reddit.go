@@ -124,7 +124,7 @@ func doRedditFetch(jsonURL string) ([]RedditListing, error) {
 	req.Header.Set("User-Agent", redditUserAgent)
 	req.Header.Set("Accept", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := sharedStdClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, types.NewWebxError(types.ErrFetchTimeout, "Reddit fetch timed out")

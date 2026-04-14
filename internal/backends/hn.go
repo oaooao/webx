@@ -45,7 +45,7 @@ func FetchHNItem(itemID string) (*HNItem, error) {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "webx/0.1 (+https://github.com/oaooao/webx)")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := sharedStdClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, types.NewWebxError(types.ErrFetchTimeout, "HN Algolia API timed out")

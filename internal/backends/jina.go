@@ -26,8 +26,8 @@ type JinaResult struct {
 // Jina strips ads/navigation and returns clean Markdown, making it a good
 // fallback when go-defuddle fails (e.g. heavy JS pages).
 //
-// Uses http.DefaultClient (not uTLS) since r.jina.ai is a public API that
-// doesn't apply fingerprint-based blocking.
+// Uses the shared standard client (not uTLS) since r.jina.ai is a public API
+// that doesn't apply fingerprint-based blocking.
 func FetchViaJina(rawURL string) (*JinaResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), jinaTimeout)
 	defer cancel()
@@ -44,7 +44,7 @@ func FetchViaJina(rawURL string) (*JinaResult, error) {
 	req.Header.Set("User-Agent", "webx/0.1 (+https://github.com/oaooao/webx)")
 	req.Header.Set("X-Return-Format", "markdown")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := sharedStdClient.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, types.NewWebxError(types.ErrFetchTimeout,
