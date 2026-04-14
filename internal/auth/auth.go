@@ -43,8 +43,13 @@ func NewFileStore(path string) *FileStore {
 	return &FileStore{path: path}
 }
 
-// DefaultStorePath returns the default auth file path: ~/.config/webx/auth.json
+// DefaultStorePath returns the auth file path.
+// If WEBX_AUTH_FILE env var is set, it overrides the default (~/.config/webx/auth.json).
+// This allows tests to redirect the store to a temporary directory.
 func DefaultStorePath() string {
+	if override := os.Getenv("WEBX_AUTH_FILE"); override != "" {
+		return override
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."

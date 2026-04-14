@@ -32,6 +32,7 @@ func main() {
 	rootCmd.AddCommand(postCmd)
 	rootCmd.AddCommand(replyCmd)
 	rootCmd.AddCommand(reactCmd)
+	rootCmd.AddCommand(authCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
