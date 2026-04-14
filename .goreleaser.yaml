@@ -1,0 +1,55 @@
+version: 2
+
+project_name: webx
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: webx
+    main: ./cmd/webx
+    binary: webx
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+
+archives:
+  - id: webx
+    builds:
+      - webx
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format: tar.gz
+    files:
+      - README*
+      - LICENSE*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: oaooao
+    name: webx
+  draft: false
+  prerelease: auto
+  name_template: "v{{ .Version }}"
