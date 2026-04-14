@@ -157,6 +157,10 @@ func FetchHTMLStd(rawURL string) (string, error) {
 	return html, nil
 }
 
+// StdClient returns the shared standard HTTP client with HTTP/2 support.
+// Use this for endpoints that require HTTP/2 or reject uTLS fingerprints.
+func StdClient() *http.Client { return sharedStdClient }
+
 // sharedStdClient is a standard HTTP client with HTTP/2 support (no TLS fingerprinting).
 var sharedStdClient = &http.Client{
 	Timeout: 60 * time.Second,

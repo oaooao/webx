@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/oaooao/webx/internal/backends"
 	"github.com/oaooao/webx/internal/types"
 )
 
@@ -17,18 +18,16 @@ const (
 	// SearchTimelineQueryID is the GraphQL operation ID for SearchTimeline.
 	// Update from https://github.com/fa0311/twitter-openapi/blob/main/src/config/placeholder.json
 	// if requests start returning 404/422.
-	SearchTimelineQueryID = "pCd62NDD9dlCDgEGgEVHMg"
+	SearchTimelineQueryID = "VhUd6vHVmLBcw0uX-6jMLA"
 )
 
 // searchTimelineVariables is the JSON variables payload for SearchTimeline.
+// Note: SearchTimeline rejects unknown variables — only include fields it expects.
 type searchTimelineVariables struct {
-	RawQuery                string `json:"rawQuery"`
-	Count                   int    `json:"count"`
-	Product                 string `json:"product"` // "Top" or "Latest"
-	QuerySource             string `json:"querySource"`
-	WithDownvotePerspective bool   `json:"withDownvotePerspective"`
-	WithReactionsMetadata   bool   `json:"withReactionsMetadata"`
-	WithReactionsPerspective bool  `json:"withReactionsPerspective"`
+	RawQuery    string `json:"rawQuery"`
+	Count       int    `json:"count"`
+	Product     string `json:"product"` // "Top" or "Latest"
+	QuerySource string `json:"querySource"`
 }
 
 // searchTimelineFeatures mirrors the feature flags used by the web client for SearchTimeline.
@@ -113,7 +112,9 @@ func SearchTwitterWithURL(apiURL, query, authToken, ct0 string, limit int, produ
 
 	SetChromeHeaders(req, auth)
 
-	resp, err := sharedClient.Do(req)
+	// Use standard HTTP client (not uTLS) — SearchTimeline requires HTTP/2
+	// which the uTLS client's HTTP/1.1-only ALPN cannot negotiate.
+	resp, err := backends.StdClient().Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, types.NewWebxError(types.ErrFetchTimeout, "Twitter search request timed out")
@@ -275,6 +276,19 @@ func ParseSearchTimelineResponse(raw json.RawMessage) ([]Tweet, error) {
 	return tweets, nil
 }
 
+// searchTimelineFieldToggles are required by the SearchTimeline endpoint.
+// All set to false — these control optional response fields.
+var searchTimelineFieldToggles = map[string]bool{
+	"withPayments":                  false,
+	"withAuxiliaryUserLabels":       false,
+	"withArticleRichContentState":   false,
+	"withArticlePlainText":          false,
+	"withArticleSummaryText":        false,
+	"withArticleVoiceOver":          false,
+	"withGrokAnalyze":               false,
+	"withDisallowedReplyControls":   false,
+}
+
 // BuildSearchTimelineURL constructs the Twitter GraphQL SearchTimeline URL.
 func BuildSearchTimelineURL(query string, count int, product string) string {
 	variables := searchTimelineVariables{
@@ -292,10 +306,12 @@ func BuildSearchTimelineURL(query string, count int, product string) string {
 		}
 	}
 	featuresJSON, _ := json.Marshal(compactFeatures)
+	fieldTogglesJSON, _ := json.Marshal(searchTimelineFieldToggles)
 
 	params := url.Values{}
 	params.Set("variables", string(variablesJSON))
 	params.Set("features", string(featuresJSON))
+	params.Set("fieldToggles", string(fieldTogglesJSON))
 
 	return fmt.Sprintf(
 		"https://x.com/i/api/graphql/%s/SearchTimeline?%s",
