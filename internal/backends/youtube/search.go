@@ -2,6 +2,7 @@ package youtube
 
 import (
 	"encoding/json"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -42,7 +43,7 @@ func SearchVideos(apiURL string, limit int) (*types.NormalizedSearchResult, erro
 
 // BuildYouTubeSearchURL constructs the YouTube search results URL.
 func BuildYouTubeSearchURL(query string) string {
-	return "https://www.youtube.com/results?search_query=" + strings.ReplaceAll(query, " ", "+")
+	return "https://www.youtube.com/results?search_query=" + url.QueryEscape(query)
 }
 
 func extractYTInitialData(pageHTML string) ([]byte, error) {

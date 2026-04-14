@@ -356,7 +356,14 @@ func runWrite(ctx types.WriteContext) types.WebxEnvelope {
 
 	if ctx.Action == types.ActionPost {
 		// Post routes by platform ID.
+		// Support "platform/subpath" format (e.g. "reddit/golang") — try full string first,
+		// then try the prefix before the first "/" as the adapter ID.
 		adapter = FindAdapter(ctx.Platform)
+		if adapter == nil {
+			if idx := strings.IndexByte(ctx.Platform, '/'); idx > 0 {
+				adapter = FindAdapter(ctx.Platform[:idx])
+			}
+		}
 		if adapter == nil {
 			trace.Push(types.TraceEvent{
 				Step: "route", Reason: types.TraceNoMatch,

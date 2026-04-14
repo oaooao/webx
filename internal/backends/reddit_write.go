@@ -126,17 +126,18 @@ func CommentReddit(apiURL, thingID, content, accessToken string) (*types.Normali
 		}
 	}
 
-	commentID := ""
+	commentName := ""
 	if len(resp.JSON.Data.Things) > 0 {
-		commentID = resp.JSON.Data.Things[0].Data.Name
+		commentName = resp.JSON.Data.Things[0].Data.Name
 	}
 
+	// ResourceURL is left empty because Reddit's comment API doesn't return a permalink.
+	// The comment fullname is stored in Message for reference.
 	return &types.NormalizedWriteResult{
-		Success:     true,
-		Action:      string(types.ActionReply),
-		ResourceURL: commentID,
-		Message:     fmt.Sprintf("Commented on %s", thingID),
-		Backend:     "reddit_oauth",
+		Success: true,
+		Action:  string(types.ActionReply),
+		Message: fmt.Sprintf("Commented on %s (comment: %s)", thingID, commentName),
+		Backend: "reddit_oauth",
 	}, nil
 }
 

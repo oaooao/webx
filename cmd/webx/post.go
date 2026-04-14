@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/oaooao/webx/internal/core"
+	"github.com/oaooao/webx/internal/types"
 	"github.com/spf13/cobra"
 )
 
@@ -79,13 +80,14 @@ func truncate(s string, n int) string {
 }
 
 // printWriteResult outputs the write envelope to stdout.
-func printWriteResult(envelope interface{}, format string) error {
+func printWriteResult(envelope types.WebxEnvelope, format string) error {
 	switch format {
 	case "markdown", "md":
-		type markdownable interface {
-			GetMarkdown() *string
+		if envelope.Content.Markdown != nil {
+			fmt.Print(*envelope.Content.Markdown)
+			return nil
 		}
-		// Use JSON fallback — envelope always has markdown in Content.Markdown
+		// fallback to JSON if no markdown
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		return enc.Encode(envelope)
