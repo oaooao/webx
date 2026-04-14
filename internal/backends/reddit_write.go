@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/oaooao/webx/internal/auth"
 	"github.com/oaooao/webx/internal/types"
 )
 
@@ -182,15 +183,26 @@ func capitalize(s string) string {
 	return string(r)
 }
 
-// LoadRedditAccessToken loads the Reddit OAuth access token from environment variable.
+// LoadRedditAccessToken loads the Reddit OAuth access token.
+// Priority: 1) ~/.config/webx/auth.json, 2) REDDIT_ACCESS_TOKEN env var.
 func LoadRedditAccessToken() (string, error) {
-	token := getEnv("REDDIT_ACCESS_TOKEN")
-	if token == "" {
-		return "", types.NewWebxError(types.ErrLoginRequired,
-			"REDDIT_ACCESS_TOKEN environment variable is required for Reddit write operations. "+
-				"See https://github.com/oaooao/webx#reddit-setup for setup instructions.")
+	// 1. Try auth store.
+	store := auth.DefaultStore()
+	if pa, err := store.Get("reddit"); err == nil && pa != nil {
+		if token := pa.Credentials["access_token"]; token != "" {
+			return token, nil
+		}
 	}
-	return token, nil
+
+	// 2. Fallback to environment variable.
+	if token := getEnv("REDDIT_ACCESS_TOKEN"); token != "" {
+		return token, nil
+	}
+
+	return "", types.NewWebxError(types.ErrLoginRequired,
+		"Reddit credentials not found. Run: webx auth add reddit\n"+
+			"Or set REDDIT_ACCESS_TOKEN environment variable.\n"+
+			"See https://github.com/oaooao/webx#reddit-setup for setup instructions.")
 }
 
 // doRedditWritePOST sends a POST request to the Reddit OAuth API with form-encoded parameters.
