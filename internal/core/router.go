@@ -36,6 +36,17 @@ func Route(ctx types.MatchContext) types.Adapter {
 	return nil
 }
 
+// FindAdapter returns the adapter with the given ID, or nil if not found.
+// Used by search (and future operations) that route by platform ID rather than URL.
+func FindAdapter(platformID string) types.Adapter {
+	for _, adapter := range registry {
+		if adapter.ID() == platformID {
+			return adapter
+		}
+	}
+	return nil
+}
+
 func ListAdapters() []types.Adapter {
 	result := make([]types.Adapter, len(registry))
 	copy(result, registry)

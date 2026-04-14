@@ -9,11 +9,13 @@ const (
 	KindVideo        WebxKind = "video"
 	KindComments     WebxKind = "comments"
 	KindMetadata     WebxKind = "metadata"
+	KindSearch       WebxKind = "search"
 )
 
 var ValidKinds = []WebxKind{
 	KindArticle, KindConversation, KindThread,
 	KindVideo, KindComments, KindMetadata,
+	KindSearch,
 }
 
 func (k WebxKind) IsValid() bool {

@@ -2,7 +2,9 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
+	"strings"
 
 	"github.com/oaooao/webx/internal/types"
 )
@@ -224,4 +226,120 @@ func RunExtract(rawURL string, requestedKind *types.WebxKind) types.WebxEnvelope
 		Trace:         trace.All(),
 		FallbackDepth: result.FallbackDepth,
 	})
+}
+
+// RunSearch executes a search on the specified platform and returns a WebxEnvelope.
+func RunSearch(query string, platformID string, opts types.SearchOptions) types.WebxEnvelope {
+	trace := types.NewTraceBuffer()
+
+	adapter := FindAdapter(platformID)
+	if adapter == nil {
+		trace.Push(types.TraceEvent{
+			Step:   "route",
+			Reason: types.TraceNoMatch,
+			Detail: "No adapter found with ID: " + platformID,
+		})
+		return types.MakeEnvelope(types.EnvelopeInput{
+			OK: false, Kind: types.KindSearch, URL: "",
+			Adapter: platformID, Backend: "none",
+			Trace: trace.All(),
+			Error: &types.EnvelopeError{Code: string(types.ErrNoMatch), Message: "Unknown platform: " + platformID},
+		})
+	}
+
+	searchable, ok := adapter.(types.SearchableAdapter)
+	if !ok {
+		trace.Push(types.TraceEvent{
+			Step:    "route",
+			Reason:  types.TraceNotImplemented,
+			Adapter: adapter.ID(),
+			Detail:  "Adapter does not implement Search()",
+		})
+		return types.MakeEnvelope(types.EnvelopeInput{
+			OK: false, Kind: types.KindSearch, URL: "",
+			Adapter: adapter.ID(), Backend: "none",
+			Trace: trace.All(),
+			Error: &types.EnvelopeError{Code: string(types.ErrUnsupportedKind), Message: adapter.ID() + " does not support search"},
+		})
+	}
+
+	trace.Push(types.TraceEvent{
+		Step:    "route",
+		Reason:  types.TraceRouteMatch,
+		Adapter: adapter.ID(),
+		Detail:  "Matched searchable adapter " + adapter.ID(),
+	})
+
+	ctx := types.SearchContext{
+		Query:    query,
+		Platform: platformID,
+		Options:  opts,
+		Trace:    trace,
+	}
+
+	result, err := searchable.Search(ctx)
+	if err != nil {
+		var wxErr *types.WebxError
+		code := string(types.ErrBackendFailed)
+		if errors.As(err, &wxErr) {
+			code = string(wxErr.Code)
+		}
+		return types.MakeEnvelope(types.EnvelopeInput{
+			OK: false, Kind: types.KindSearch, URL: "",
+			Adapter: adapter.ID(), Backend: "error",
+			Trace: trace.All(),
+			Error: &types.EnvelopeError{Code: code, Message: err.Error()},
+		})
+	}
+
+	// Render search results as markdown.
+	markdown := RenderSearchMarkdown(result)
+
+	title := "Search: " + query
+	return types.MakeEnvelope(types.EnvelopeInput{
+		OK: true, Kind: types.KindSearch, URL: "",
+		Adapter:  adapter.ID(),
+		Backend:  result.Backend,
+		Title:    &title,
+		Markdown: &markdown,
+		Data:     result,
+		Trace:    trace.All(),
+	})
+}
+
+// RenderSearchMarkdown renders search results as readable markdown.
+func RenderSearchMarkdown(result *types.NormalizedSearchResult) string {
+	if result == nil || len(result.Items) == 0 {
+		return "No results found.\n"
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Search Results for %q\n\n", result.Query)
+	fmt.Fprintf(&b, "%d results", len(result.Items))
+	if result.TotalEstimate > 0 {
+		fmt.Fprintf(&b, " (of ~%d total)", result.TotalEstimate)
+	}
+	b.WriteString("\n\n")
+
+	for i, item := range result.Items {
+		fmt.Fprintf(&b, "## %d. %s\n\n", i+1, item.Title)
+		if item.URL != "" {
+			fmt.Fprintf(&b, "URL: %s\n", item.URL)
+		}
+		if item.Author != "" {
+			fmt.Fprintf(&b, "Author: %s\n", item.Author)
+		}
+		if item.Date != "" {
+			fmt.Fprintf(&b, "Date: %s\n", item.Date)
+		}
+		if item.Score > 0 {
+			fmt.Fprintf(&b, "Score: %.0f\n", item.Score)
+		}
+		if item.Snippet != "" {
+			fmt.Fprintf(&b, "\n%s\n", item.Snippet)
+		}
+		b.WriteString("\n")
+	}
+
+	return b.String()
 }

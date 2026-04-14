@@ -132,3 +132,39 @@ func TestResetRegistry(t *testing.T) {
 		t.Fatalf("expected empty registry after reset, got %d", len(list))
 	}
 }
+
+// --- FindAdapter tests ---
+
+func TestFindAdapter_WhenKnownID_ShouldReturnAdapter(t *testing.T) {
+	ResetRegistry()
+	a := &mockAdapter{id: "twitter", priority: 90, kinds: []types.WebxKind{types.KindThread}, hostname: "x.com"}
+	RegisterAdapter(a)
+
+	got := FindAdapter("twitter")
+	if got == nil {
+		t.Fatal("expected adapter, got nil")
+	}
+	if got.ID() != "twitter" {
+		t.Fatalf("expected id=twitter, got %s", got.ID())
+	}
+}
+
+func TestFindAdapter_WhenUnknownID_ShouldReturnNil(t *testing.T) {
+	ResetRegistry()
+	a := &mockAdapter{id: "twitter", priority: 90, kinds: []types.WebxKind{types.KindThread}, hostname: "x.com"}
+	RegisterAdapter(a)
+
+	got := FindAdapter("nonexistent")
+	if got != nil {
+		t.Fatalf("expected nil, got %s", got.ID())
+	}
+}
+
+func TestFindAdapter_WhenEmptyRegistry_ShouldReturnNil(t *testing.T) {
+	ResetRegistry()
+
+	got := FindAdapter("twitter")
+	if got != nil {
+		t.Fatalf("expected nil for empty registry, got %s", got.ID())
+	}
+}

@@ -208,3 +208,165 @@ func TestEnvelopeSourceDomain(t *testing.T) {
 		t.Fatalf("expected domain=example.com, got %s", env.Source.Domain)
 	}
 }
+
+// --- RunSearch tests ---
+
+// searchableAdapter is a mockAdapter that also implements SearchableAdapter.
+type searchableAdapter struct {
+	mockAdapter
+	searchResult *types.NormalizedSearchResult
+	searchErr    error
+}
+
+func (s *searchableAdapter) Search(ctx types.SearchContext) (*types.NormalizedSearchResult, error) {
+	if s.searchErr != nil {
+		return nil, s.searchErr
+	}
+	return s.searchResult, nil
+}
+
+func TestRunSearch_WhenPlatformNotFound_ShouldReturnError(t *testing.T) {
+	ResetRegistry()
+
+	env := RunSearch("test query", "nonexistent", types.DefaultSearchOptions())
+	if env.OK {
+		t.Fatal("expected ok=false for unknown platform")
+	}
+	if env.Error == nil {
+		t.Fatal("expected non-nil error")
+	}
+	if env.Error.Code != string(types.ErrNoMatch) {
+		t.Fatalf("expected NO_MATCH error, got %s", env.Error.Code)
+	}
+	if env.Kind != types.KindSearch {
+		t.Fatalf("expected kind=search, got %s", env.Kind)
+	}
+}
+
+func TestRunSearch_WhenNotSearchable_ShouldReturnError(t *testing.T) {
+	ResetRegistry()
+	// mockAdapter does NOT implement SearchableAdapter
+	adapter := &mockAdapter{id: "plain", priority: 100, kinds: []types.WebxKind{types.KindArticle}, hostname: "example.com"}
+	RegisterAdapter(adapter)
+
+	env := RunSearch("test query", "plain", types.DefaultSearchOptions())
+	if env.OK {
+		t.Fatal("expected ok=false when adapter doesn't support search")
+	}
+	if env.Error.Code != string(types.ErrUnsupportedKind) {
+		t.Fatalf("expected UNSUPPORTED_KIND, got %s", env.Error.Code)
+	}
+}
+
+func TestRunSearch_WhenSuccess_ShouldReturnResults(t *testing.T) {
+	ResetRegistry()
+	result := &types.NormalizedSearchResult{
+		Items: []types.SearchResultItem{
+			{Title: "Result 1", URL: "https://example.com/1", Author: "user1", Kind: types.KindArticle},
+			{Title: "Result 2", URL: "https://example.com/2", Author: "user2", Kind: types.KindArticle},
+		},
+		Query:   "test query",
+		Backend: "mock_search",
+		HasMore: false,
+	}
+	adapter := &searchableAdapter{
+		mockAdapter:  mockAdapter{id: "test-search", priority: 100, kinds: []types.WebxKind{types.KindArticle}, hostname: "example.com"},
+		searchResult: result,
+	}
+	RegisterAdapter(adapter)
+
+	env := RunSearch("test query", "test-search", types.DefaultSearchOptions())
+	if !env.OK {
+		t.Fatalf("expected ok=true, got ok=false, error=%v", env.Error)
+	}
+	if env.Kind != types.KindSearch {
+		t.Fatalf("expected kind=search, got %s", env.Kind)
+	}
+	if env.Source.Adapter != "test-search" {
+		t.Fatalf("expected adapter=test-search, got %s", env.Source.Adapter)
+	}
+	if env.Source.Backend != "mock_search" {
+		t.Fatalf("expected backend=mock_search, got %s", env.Source.Backend)
+	}
+	if env.Content.Markdown == nil {
+		t.Fatal("expected non-nil markdown")
+	}
+	if env.Data == nil {
+		t.Fatal("expected non-nil data")
+	}
+}
+
+func TestRunSearch_WhenAdapterReturnsError_ShouldReturnErrorEnvelope(t *testing.T) {
+	ResetRegistry()
+	adapter := &searchableAdapter{
+		mockAdapter: mockAdapter{id: "failing", priority: 100, kinds: []types.WebxKind{types.KindArticle}, hostname: "example.com"},
+		searchErr:   types.NewWebxError(types.ErrRateLimited, "too many requests"),
+	}
+	RegisterAdapter(adapter)
+
+	env := RunSearch("test query", "failing", types.DefaultSearchOptions())
+	if env.OK {
+		t.Fatal("expected ok=false when search returns error")
+	}
+	if env.Error.Code != string(types.ErrRateLimited) {
+		t.Fatalf("expected RATE_LIMITED, got %s", env.Error.Code)
+	}
+}
+
+func TestRenderSearchMarkdown_WhenResults_ShouldContainTitles(t *testing.T) {
+	result := &types.NormalizedSearchResult{
+		Items: []types.SearchResultItem{
+			{Title: "First Result", URL: "https://example.com/1", Author: "alice", Score: 42},
+			{Title: "Second Result", URL: "https://example.com/2", Snippet: "A brief description"},
+		},
+		Query: "test query",
+	}
+	md := RenderSearchMarkdown(result)
+
+	checks := []string{
+		"Search Results",
+		"test query",
+		"First Result",
+		"Second Result",
+		"alice",
+		"42",
+		"A brief description",
+	}
+	for _, want := range checks {
+		if !contains(md, want) {
+			t.Errorf("markdown missing %q in:\n%s", want, md)
+		}
+	}
+}
+
+func TestRenderSearchMarkdown_WhenEmpty_ShouldReturnNoResults(t *testing.T) {
+	result := &types.NormalizedSearchResult{
+		Items: []types.SearchResultItem{},
+		Query: "empty query",
+	}
+	md := RenderSearchMarkdown(result)
+	if md != "No results found.\n" {
+		t.Errorf("expected 'No results found.' for empty results, got %q", md)
+	}
+}
+
+func TestRenderSearchMarkdown_WhenNil_ShouldReturnNoResults(t *testing.T) {
+	md := RenderSearchMarkdown(nil)
+	if md != "No results found.\n" {
+		t.Errorf("expected 'No results found.' for nil, got %q", md)
+	}
+}
+
+// contains is a helper to check substring presence.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsSubstring(s, substr))
+}
+
+func containsSubstring(s, sub string) bool {
+	for i := 0; i <= len(s)-len(sub); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}

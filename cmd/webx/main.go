@@ -28,6 +28,7 @@ func main() {
 	rootCmd.AddCommand(readCmd)
 	rootCmd.AddCommand(extractCmd)
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(searchCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
