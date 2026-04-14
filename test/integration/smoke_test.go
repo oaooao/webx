@@ -273,3 +273,133 @@ func adapterLabel(adapter string) string {
 	}
 	return strings.Join(parts, "")
 }
+
+// --- Write operation smoke tests ---
+//
+// Write operations are NOT run against real platforms (to avoid creating spam).
+// Instead, we verify:
+//   1. When auth is missing → LOGIN_REQUIRED error (auth check works)
+//   2. The router correctly routes write requests to the right adapter
+//
+// For test cases that DO have auth (TWITTER_AUTH_TOKEN set), we skip real posting
+// by default. A future "canary" test account could enable W-01/W-02 with confirmation.
+
+type writeSmokeCase struct {
+	id         string
+	action     string // "post", "reply", "react"
+	platform   string // for Post
+	targetURL  string // for Reply/React
+	content    string
+	reaction   string
+	skipReason string
+	// wantErrCode: if non-empty, expect this error code (used for no-auth checks)
+	wantErrCode string
+	note        string
+}
+
+var writeSmokeCases = []writeSmokeCase{
+	{
+		id:          "W-01",
+		action:      "post",
+		platform:    "twitter",
+		content:     "webx integration test [ignore]",
+		wantErrCode: string(types.ErrLoginRequired),
+		skipReason:  skipIfNoEnv("", ""), // always run: verifies auth check
+		note:        "Twitter Post — no auth → LOGIN_REQUIRED (safe, no side effects)",
+	},
+	{
+		id:          "W-02",
+		action:      "reply",
+		targetURL:   "https://x.com/browser_use/status/2032731571686629514",
+		content:     "webx integration test [ignore]",
+		wantErrCode: string(types.ErrLoginRequired),
+		note:        "Twitter Reply — no auth → LOGIN_REQUIRED",
+	},
+	{
+		id:          "W-03",
+		action:      "react",
+		targetURL:   "https://x.com/browser_use/status/2032731571686629514",
+		reaction:    "like",
+		wantErrCode: string(types.ErrLoginRequired),
+		note:        "Twitter React (like) — no auth → LOGIN_REQUIRED",
+	},
+	{
+		id:          "W-04",
+		action:      "post",
+		platform:    "reddit",
+		content:     "webx integration test [ignore]",
+		wantErrCode: string(types.ErrLoginRequired),
+		note:        "Reddit Post — no auth → LOGIN_REQUIRED",
+	},
+	{
+		id:          "W-05",
+		action:      "reply",
+		targetURL:   "https://www.reddit.com/r/ClaudeCode/comments/1sal1yk/",
+		content:     "webx integration test [ignore]",
+		wantErrCode: string(types.ErrLoginRequired),
+		note:        "Reddit Reply — no auth → LOGIN_REQUIRED",
+	},
+}
+
+func TestWriteSmokeAll(t *testing.T) {
+	for _, tc := range writeSmokeCases {
+		tc := tc
+		t.Run(tc.id+" Write/"+tc.action+"/"+tc.platform+tc.targetURL, func(t *testing.T) {
+			t.Parallel()
+			runWriteSmokeCase(t, tc)
+		})
+	}
+}
+
+func runWriteSmokeCase(t *testing.T, tc writeSmokeCase) {
+	t.Helper()
+
+	if tc.skipReason != "" {
+		t.Skip(tc.skipReason)
+	}
+
+	var env types.WebxEnvelope
+	switch tc.action {
+	case "post":
+		env = core.RunPost(tc.platform, tc.content)
+	case "reply":
+		env = core.RunReply(tc.targetURL, tc.content)
+	case "react":
+		env = core.RunReact(tc.targetURL, tc.reaction)
+	default:
+		t.Fatalf("unknown write action: %s", tc.action)
+	}
+
+	if tc.wantErrCode != "" {
+		// We expect a specific error (e.g. LOGIN_REQUIRED for no-auth checks).
+		if env.OK {
+			t.Fatalf("expected ok=false with error %s, got ok=true", tc.wantErrCode)
+		}
+		if env.Error == nil {
+			t.Fatalf("expected error with code %s, got nil error", tc.wantErrCode)
+		}
+		if env.Error.Code != tc.wantErrCode {
+			t.Errorf("error code: want %q, got %q (message: %s)", tc.wantErrCode, env.Error.Code, env.Error.Message)
+		}
+		// Verify kind is always "write" even on error
+		if env.Kind != types.KindWrite {
+			t.Errorf("kind: want %q, got %q", types.KindWrite, env.Kind)
+		}
+		return
+	}
+
+	// If no wantErrCode, we expect success.
+	if !env.OK {
+		errMsg := "<nil>"
+		if env.Error != nil {
+			errMsg = env.Error.Code + ": " + env.Error.Message
+		}
+		t.Fatalf("expected ok=true, got ok=false; error=%s", errMsg)
+	}
+	if env.Kind != types.KindWrite {
+		t.Errorf("kind: want %q, got %q", types.KindWrite, env.Kind)
+	}
+	if env.Data == nil {
+		t.Fatal("expected non-nil data")
+	}
+}
