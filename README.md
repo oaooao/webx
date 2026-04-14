@@ -101,6 +101,9 @@ $ webx doctor https://twitter.com/user/status/123
 
 ```sh
 $ webx search "async rust" --platform hn
+$ webx search "webx" --platform reddit          # subreddit + time filter supported
+$ webx search "go tutorial" --platform youtube
+$ webx search "AI agents" --platform twitter     # requires auth
 ```
 
 **Post, reply, react**
@@ -146,7 +149,7 @@ $ webx read https://reddit.com/r/golang/comments/abc --format markdown
 | Platform | Adapter | What you get |
 |----------|---------|--------------|
 | Twitter / X | `twitter` | Tweet text, thread, author, metrics ¹ |
-| Reddit | `reddit` | Post + top comments, subreddit, score |
+| Reddit | `reddit` | Post + full comment tree (with expansion), subreddit, score |
 | YouTube | `youtube` | Title, description, transcript (if available) |
 | Hacker News | `hn` | Post + comment tree, scores |
 | arXiv | `arxiv` | Title, authors, abstract |
