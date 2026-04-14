@@ -29,6 +29,9 @@ func main() {
 	rootCmd.AddCommand(extractCmd)
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(searchCmd)
+	rootCmd.AddCommand(postCmd)
+	rootCmd.AddCommand(replyCmd)
+	rootCmd.AddCommand(reactCmd)
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

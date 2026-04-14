@@ -12,7 +12,6 @@
 
 package backends
 
-/*
 import (
 	"net/http"
 	"net/http/httptest"
@@ -304,7 +303,7 @@ func TestRedditWriteOps_ErrorPaths(t *testing.T) {
 	cases := []struct {
 		name        string
 		statusCode  int
-		wantErrCode types.WebxErrorCode
+		wantErrCode types.ErrorCode
 	}{
 		{"unauthorized", 401, types.ErrLoginRequired},
 		{"forbidden", 403, types.ErrLoginRequired},
@@ -334,4 +333,3 @@ func TestRedditWriteOps_ErrorPaths(t *testing.T) {
 		})
 	}
 }
-*/
