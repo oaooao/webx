@@ -8,10 +8,8 @@ import (
 	"crypto/tls"
 	"net"
 	"net/http"
-	"sync"
 	"time"
 
-	tlsclient "github.com/bogdanfinn/tls-client"
 	utls "github.com/refraction-networking/utls"
 )
 
@@ -110,34 +108,6 @@ func NewUTLSClient() *http.Client {
 		Timeout:   60 * time.Second,
 	}
 }
-
-// ChromeSession returns a shared tls-client session that fully impersonates Chrome —
-// both TLS fingerprint (JA3) and HTTP/2 settings (SETTINGS frame, window sizes,
-// header ordering). Use for endpoints with strict browser fingerprint checks
-// (e.g. Twitter SearchTimeline behind Cloudflare).
-//
-// Powered by tls-client (Go equivalent of Python's curl_cffi).
-func ChromeSession() (tlsclient.HttpClient, error) {
-	chromeSessionMu.Lock()
-	defer chromeSessionMu.Unlock()
-
-	if sharedChromeSession != nil {
-		return sharedChromeSession, nil
-	}
-
-	session, err := newChromeSession()
-	if err != nil {
-		return nil, err
-	}
-
-	sharedChromeSession = session
-	return sharedChromeSession, nil
-}
-
-var (
-	chromeSessionMu     sync.Mutex
-	sharedChromeSession tlsclient.HttpClient
-)
 
 // sharedUTLSClient is the package-level default client used by FetchHTML.
 // Initialised once; safe for concurrent reads after init.
