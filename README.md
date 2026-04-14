@@ -13,7 +13,7 @@ $ webx read https://news.ycombinator.com/item?id=43234567
 }
 ```
 
-webx routes any URL to the right backend, extracts clean content, and returns a consistent JSON envelope — no configuration, no browser, no API keys.
+webx routes any URL to the right backend, extracts clean content, and returns a consistent JSON envelope — no configuration, no browser, no API keys (except Twitter).
 
 ## Install
 
@@ -97,6 +97,31 @@ $ webx doctor https://twitter.com/user/status/123
 }
 ```
 
+**Search across platforms**
+
+```sh
+$ webx search "async rust" --platform hn
+```
+
+**Post, reply, react**
+
+```sh
+$ webx post twitter "Hello from webx!" --confirm
+$ webx reply https://x.com/user/status/123 "Great thread!" --confirm
+$ webx react https://reddit.com/r/golang/comments/abc --like --confirm
+```
+
+Write operations require `--confirm` (safety gate) and platform authentication.
+
+**Manage credentials**
+
+```sh
+$ webx auth add twitter    # interactive setup
+$ webx auth list           # show configured platforms
+$ webx auth test twitter   # verify credentials work
+$ webx auth remove twitter
+```
+
 **Output as Markdown**
 
 ```sh
@@ -109,15 +134,12 @@ $ webx read https://reddit.com/r/golang/comments/abc --format markdown
 |---------|-------------|
 | `webx read <url>` | Fetch URL, return content as JSON (default) or Markdown |
 | `webx extract <url> --kind <kind>` | Extract structured data of a specific kind |
+| `webx search <query> --platform <p>` | Search a platform (hn, reddit, youtube, twitter) |
+| `webx post <platform> "content"` | Post new content to a platform |
+| `webx reply <url> "content"` | Reply to a specific URL |
+| `webx react <url> --like` | React to content (like, upvote, retweet) |
+| `webx auth add <platform>` | Configure credentials for a platform |
 | `webx doctor <url>` | Diagnose routing, backend selection, and trace |
-
-**Flags**
-
-```
-webx read --format json|markdown   # output format (default: json)
-webx read --kind <kind>            # hint the expected content kind
-webx extract --kind <kind>         # required: conversation, thread, article, video, comments, metadata
-```
 
 ## Supported Platforms
 
@@ -138,23 +160,36 @@ webx extract --kind <kind>         # required: conversation, thread, article, vi
 
 Twitter has no public API for reading tweets. webx uses the same internal GraphQL API that twitter.com itself uses, which requires your login cookies.
 
-**Step 1:** Log in to [x.com](https://x.com) in your browser.
+**Option A: Use `webx auth` (recommended)**
 
-**Step 2:** Open DevTools (F12) → Application → Cookies → `https://x.com` and copy these two values:
+```sh
+webx auth add twitter
+```
 
-| Cookie name | Environment variable |
-|-------------|---------------------|
-| `auth_token` | `TWITTER_AUTH_TOKEN` |
-| `ct0` | `TWITTER_CT0` |
+This interactively prompts for your cookies and stores them in `~/.config/webx/auth.json`.
 
-**Step 3:** Export them in your shell:
+**Option B: Environment variables**
+
+1. Log in to [x.com](https://x.com) in your browser
+2. Open DevTools (F12) → Application → Cookies → `https://x.com`
+3. Copy `auth_token` and `ct0`, then export:
 
 ```sh
 export TWITTER_AUTH_TOKEN="your_auth_token_here"
 export TWITTER_CT0="your_ct0_here"
 ```
 
-Add these to your `~/.bashrc` or `~/.zshrc` to persist across sessions. Without these variables, Twitter URLs will return a `LOGIN_REQUIRED` error with instructions.
+webx checks the auth store first, then falls back to environment variables. Without either, Twitter URLs return a `LOGIN_REQUIRED` error with setup instructions.
+
+## Reddit Setup
+
+Reddit read operations work without authentication. Write operations (post, comment, vote) require an OAuth2 access token:
+
+```sh
+webx auth add reddit
+```
+
+Or set `REDDIT_ACCESS_TOKEN` in your environment.
 
 ## Output Schema
 
