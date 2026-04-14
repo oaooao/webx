@@ -126,9 +126,9 @@ func TestParseRedditListings_CommentTree(t *testing.T) {
 		t.Fatalf("ParseRedditListings: %v", err)
 	}
 
-	// Should have 2 top-level comments (the "more" kind is skipped)
-	if len(result.Comments) != 2 {
-		t.Errorf("top-level comments: got %d, want 2", len(result.Comments))
+	// Should have 3 top-level entries: 2 comments + 1 "more" placeholder
+	if len(result.Comments) != 3 {
+		t.Errorf("top-level comments: got %d, want 3", len(result.Comments))
 	}
 
 	// First comment has one nested reply

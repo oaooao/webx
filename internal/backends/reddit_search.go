@@ -124,23 +124,51 @@ func SearchRedditPosts(apiURL string, limit int, sort string) (*types.Normalized
 	}, nil
 }
 
+// RedditSearchOptions extends search with subreddit restriction and time filter.
+type RedditSearchOptions struct {
+	Subreddit string // restrict to this subreddit (empty = global)
+	TimeRange string // hour, day, week, month, year, all (empty = all)
+}
+
 // BuildRedditSearchURL constructs the Reddit search.json URL.
-// sort: "relevance" → sort=relevance, "recent" → sort=new, "top" → sort=top
-func BuildRedditSearchURL(query string, limit int, sort string) string {
+// sort: "relevance", "recent" (→new), "top", "hot", "comments"
+func BuildRedditSearchURL(query string, limit int, sort string, opts ...RedditSearchOptions) string {
 	redditSort := "relevance"
 	switch sort {
 	case "recent":
 		redditSort = "new"
 	case "top":
 		redditSort = "top"
+	case "hot":
+		redditSort = "hot"
+	case "comments":
+		redditSort = "comments"
 	}
 	if limit <= 0 {
 		limit = 20
 	}
+
 	params := url.Values{}
 	params.Set("q", query)
 	params.Set("limit", fmt.Sprintf("%d", limit))
 	params.Set("sort", redditSort)
 	params.Set("type", "link")
-	return "https://www.reddit.com/search.json?" + params.Encode()
+	params.Set("raw_json", "1")
+
+	// Apply optional search options
+	var o RedditSearchOptions
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	if o.TimeRange != "" {
+		params.Set("t", o.TimeRange) // hour, day, week, month, year, all
+	}
+
+	base := "https://www.reddit.com"
+	if o.Subreddit != "" {
+		// Subreddit-restricted search
+		params.Set("restrict_sr", "on")
+		return fmt.Sprintf("%s/r/%s/search.json?%s", base, o.Subreddit, params.Encode())
+	}
+	return base + "/search.json?" + params.Encode()
 }

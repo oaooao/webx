@@ -79,7 +79,8 @@ type RedditCommentNode struct {
 }
 
 // FetchRedditJSON fetches the .json endpoint for a Reddit URL with retries.
-func FetchRedditJSON(redditURL string) ([]RedditListing, error) {
+// commentSort is optional: "best", "top", "new", "controversial", "old", "qa". Empty = default.
+func FetchRedditJSON(redditURL string, commentSort ...string) ([]RedditListing, error) {
 	parsedURL, err := url.Parse(redditURL)
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrFetchFailed, err.Error())
@@ -89,7 +90,13 @@ func FetchRedditJSON(redditURL string) ([]RedditListing, error) {
 	if !strings.HasSuffix(path, ".json") {
 		parsedURL.Path = path + ".json"
 	}
-	// Preserve query params but remove reddit tracking params that can cause issues
+	// Add raw_json=1 to disable HTML entity encoding in responses
+	q := parsedURL.Query()
+	q.Set("raw_json", "1")
+	if len(commentSort) > 0 && commentSort[0] != "" {
+		q.Set("sort", commentSort[0])
+	}
+	parsedURL.RawQuery = q.Encode()
 	jsonURL := parsedURL.String()
 
 	var lastErr error
@@ -185,9 +192,15 @@ func ParseRedditListings(listings []RedditListing) (*RedditResult, error) {
 func parseCommentChildren(things []RedditThing) []RedditCommentNode {
 	var nodes []RedditCommentNode
 	for _, thing := range things {
+		if thing.Kind == "more" {
+			// Capture "more" placeholder so ExpandMoreComments can use it
+			var more RedditComment
+			if err := json.Unmarshal(thing.Data, &more); err == nil && len(more.Children) > 0 {
+				nodes = append(nodes, RedditCommentNode{Comment: more})
+			}
+			continue
+		}
 		if thing.Kind != "t1" {
-			// "more" placeholders are silently skipped in v0
-			// (expandMoreComments is a no-op stub; see reddit adapter)
 			continue
 		}
 
@@ -216,12 +229,100 @@ func parseCommentChildren(things []RedditThing) []RedditCommentNode {
 	return nodes
 }
 
-// ExpandMoreComments is a stub for v0. Full "more" comment expansion requires
-// POST /api/morechildren.json with link_id + children IDs, subject to stricter
-// rate limits. Not implemented in v0; the initial .json response's top-level
-// comments are sufficient for most use cases.
-func ExpandMoreComments(_ *RedditResult, _ string) {
-	// TODO(v1): implement morechildren expansion
+// ExpandMoreComments expands "more" comment placeholders by fetching
+// /api/morechildren.json. linkID should be the post's fullname (e.g. "t3_abc123").
+// Modifies result.Comments in place, inserting expanded comments.
+func ExpandMoreComments(result *RedditResult, linkID string) {
+	// Collect all "more" placeholders from the tree
+	var moreIDs []string
+	collectMoreIDs(result.Comments, &moreIDs)
+	if len(moreIDs) == 0 {
+		return
+	}
+
+	// Limit to 100 IDs per request (Reddit API limit)
+	if len(moreIDs) > 100 {
+		moreIDs = moreIDs[:100]
+	}
+
+	expanded, err := fetchMoreChildren(linkID, moreIDs)
+	if err != nil || len(expanded) == 0 {
+		return
+	}
+
+	// Build a map of expanded comments by parent
+	byParent := make(map[string][]RedditCommentNode)
+	for _, node := range expanded {
+		parentID := ""
+		if node.Comment.Depth > 0 {
+			// Reddit returns parent_id as fullname but we need just the ID portion
+			parentID = strings.TrimPrefix(fmt.Sprintf("t1_%s", node.Comment.ID), "t1_")
+		}
+		_ = parentID
+		byParent[node.Comment.ID] = node.Replies
+	}
+
+	// Append expanded comments to the top level (simplified — full tree insertion is complex)
+	result.Comments = append(result.Comments, expanded...)
+}
+
+func collectMoreIDs(nodes []RedditCommentNode, ids *[]string) {
+	for _, node := range nodes {
+		if len(node.Comment.Children) > 0 && node.Comment.Body == "" {
+			*ids = append(*ids, node.Comment.Children...)
+		}
+		collectMoreIDs(node.Replies, ids)
+	}
+}
+
+func fetchMoreChildren(linkID string, childIDs []string) ([]RedditCommentNode, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), redditTimeout)
+	defer cancel()
+
+	params := url.Values{}
+	params.Set("api_type", "json")
+	params.Set("link_id", linkID)
+	params.Set("children", strings.Join(childIDs, ","))
+	params.Set("sort", "confidence")
+	params.Set("raw_json", "1")
+
+	apiURL := "https://www.reddit.com/api/morechildren.json?" + params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", redditUserAgent)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := sharedStdClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("morechildren HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	if err != nil {
+		return nil, err
+	}
+
+	// Response format: {"json": {"data": {"things": [...]}}}
+	var envelope struct {
+		JSON struct {
+			Data struct {
+				Things []RedditThing `json:"things"`
+			} `json:"data"`
+		} `json:"json"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, err
+	}
+
+	return parseCommentChildren(envelope.JSON.Data.Things), nil
 }
 
 // RenderRedditMarkdown converts a RedditResult to readable markdown.
