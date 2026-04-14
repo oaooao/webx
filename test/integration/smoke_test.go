@@ -11,6 +11,22 @@ import (
 	"github.com/oaooao/webx/internal/core"
 )
 
+// envOr returns the env var value or the fallback default.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+// skipIfNoEnv returns a skip reason when the env var is not set; empty string means "don't skip".
+func skipIfNoEnv(key, reason string) string {
+	if os.Getenv(key) != "" {
+		return ""
+	}
+	return reason
+}
+
 type smokeCase struct {
 	id              string
 	url             string
@@ -38,9 +54,8 @@ var smokeCases = []smokeCase{
 	{
 		id:               "T-03",
 		url:              "https://www.youtube.com/watch?v=Ah9p7v7nJWg",
-		expectedAdapter:  "generic-article",
-		acceptedBackends: []string{"jina", "defuddle"},
-		note:             "YouTube adapter may vary",
+		expectedAdapter:  "youtube",
+		acceptedBackends: []string{"youtube_native"},
 	},
 	{
 		id:               "T-04",
@@ -53,6 +68,20 @@ var smokeCases = []smokeCase{
 		url:              "https://arxiv.org/abs/2401.00001",
 		expectedAdapter:  "arxiv",
 		acceptedBackends: []string{"defuddle", "jina"},
+	},
+	{
+		id:               "T-11",
+		url:              envOr("WEBX_TEST_CLAUDE_SHARE", "https://claude.ai/share/339cb5ab-e4c5-4c2c-b45d-8a2fe81ef818"),
+		expectedAdapter:  "claude-share",
+		acceptedBackends: []string{"claude_snapshot"},
+		skipReason:       skipIfNoEnv("WEBX_TEST_CLAUDE_SHARE", "set WEBX_TEST_CLAUDE_SHARE to a valid share URL"),
+	},
+	{
+		id:               "T-12",
+		url:              envOr("WEBX_TEST_CHATGPT_SHARE", "https://chatgpt.com/share/6786aa57-7a38-800e-92e8-87e4acebc830"),
+		expectedAdapter:  "chatgpt-share",
+		acceptedBackends: []string{"chatgpt_api", "chatgpt_html"},
+		skipReason:       skipIfNoEnv("WEBX_TEST_CHATGPT_SHARE", "set WEBX_TEST_CHATGPT_SHARE to a valid share URL"),
 	},
 	{
 		id:               "T-07",
@@ -71,6 +100,13 @@ var smokeCases = []smokeCase{
 		url:              "https://example.com",
 		expectedAdapter:  "generic-article",
 		acceptedBackends: []string{"jina", "defuddle"},
+	},
+	{
+		id:               "T-10",
+		url:              "https://youtu.be/dQw4w9WgXcQ",
+		expectedAdapter:  "youtube",
+		acceptedBackends: []string{"youtube_native"},
+		note:             "youtu.be short URL variant",
 	},
 }
 
