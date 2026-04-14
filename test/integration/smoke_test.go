@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	_ "github.com/oaooao/webx/internal/adapters"
+	"github.com/oaooao/webx/internal/auth"
 	"github.com/oaooao/webx/internal/core"
 	"github.com/oaooao/webx/internal/types"
 )
@@ -348,6 +349,35 @@ func TestWriteSmokeAll(t *testing.T) {
 			t.Parallel()
 			runWriteSmokeCase(t, tc)
 		})
+	}
+}
+
+// --- Auth smoke tests ---
+//
+// A-01: Verifies that auth.DefaultStore().List() returns no error even when the
+// store file does not exist (empty state). This is the baseline check for the
+// auth subsystem — if this fails, all auth-dependent operations will break.
+
+func TestAuthSmokeAll(t *testing.T) {
+	t.Run("A-01 AuthList/EmptyStore", func(t *testing.T) {
+		runAuthSmokeA01(t)
+	})
+}
+
+func runAuthSmokeA01(t *testing.T) {
+	t.Helper()
+
+	// Point DefaultStore at a temp dir so we don't touch ~/.config/webx/auth.json.
+	dir := t.TempDir()
+	t.Setenv("WEBX_AUTH_FILE", dir+"/auth.json")
+
+	store := auth.DefaultStore()
+	all, err := store.List()
+	if err != nil {
+		t.Fatalf("A-01: auth list returned error on empty store: %v", err)
+	}
+	if len(all) != 0 {
+		t.Errorf("A-01: expected empty map, got %d entries", len(all))
 	}
 }
 
