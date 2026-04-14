@@ -14,44 +14,32 @@ import (
 
 const hnSearchTimeout = 15 * time.Second
 
-// HNSearchResponse is the Algolia search API response.
-type HNSearchResponse struct {
-	Hits             []HNSearchHit `json:"hits"`
-	NbHits           int           `json:"nbHits"`
-	HitsPerPage      int           `json:"hitsPerPage"`
-	Page             int           `json:"page"`
-	NbPages          int           `json:"nbPages"`
+// hnSearchResponse is the Algolia search API response (internal parsing type).
+type hnSearchResponse struct {
+	Hits        []hnSearchHit `json:"hits"`
+	NbHits      int           `json:"nbHits"`
+	HitsPerPage int           `json:"hitsPerPage"`
+	Page        int           `json:"page"`
+	NbPages     int           `json:"nbPages"`
 }
 
-// HNSearchHit is a single result from the Algolia HN search API.
-type HNSearchHit struct {
-	ObjectID    string  `json:"objectID"`
-	Title       string  `json:"title"`
-	URL         string  `json:"url"`
-	Author      string  `json:"author"`
-	Points      int     `json:"points"`
-	NumComments int     `json:"num_comments"`
-	CreatedAt   string  `json:"created_at"`
-	StoryText   string  `json:"story_text"`
+type hnSearchHit struct {
+	ObjectID    string `json:"objectID"`
+	Title       string `json:"title"`
+	URL         string `json:"url"`
+	Author      string `json:"author"`
+	Points      int    `json:"points"`
+	NumComments int    `json:"num_comments"`
+	CreatedAt   string `json:"created_at"`
+	StoryText   string `json:"story_text"`
 }
 
-// SearchHNStories searches Hacker News via the Algolia API.
-// sort: "relevance" → /search, "recent" → /search_by_date
-func SearchHNStories(query string, limit int, sort string) (*HNSearchResponse, error) {
-	endpoint := "search"
-	if sort == "recent" {
-		endpoint = "search_by_date"
-	}
-
+// SearchHNStories searches Hacker News via the Algolia API and returns normalized results.
+// apiURL should be the full search URL (e.g. "https://hn.algolia.com/api/v1/search?query=foo&hitsPerPage=20&tags=story").
+// In tests, a test server URL is passed directly; in production, callers use BuildHNSearchURL.
+func SearchHNStories(apiURL string, limit int) (*types.NormalizedSearchResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), hnSearchTimeout)
 	defer cancel()
-
-	params := url.Values{}
-	params.Set("query", query)
-	params.Set("hitsPerPage", fmt.Sprintf("%d", limit))
-	params.Set("tags", "story")
-
-	apiURL := fmt.Sprintf("https://hn.algolia.com/api/v1/%s?%s", endpoint, params.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
@@ -78,10 +66,57 @@ func SearchHNStories(query string, limit int, sort string) (*HNSearchResponse, e
 		return nil, types.NewWebxError(types.ErrFetchFailed, err.Error())
 	}
 
-	var result HNSearchResponse
-	if err := json.Unmarshal(body, &result); err != nil {
+	var raw hnSearchResponse
+	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, types.NewWebxError(types.ErrBackendFailed, "HN Algolia returned invalid JSON: "+err.Error())
 	}
 
-	return &result, nil
+	items := make([]types.SearchResultItem, 0, len(raw.Hits))
+	for _, hit := range raw.Hits {
+		itemURL := fmt.Sprintf("https://news.ycombinator.com/item?id=%s", hit.ObjectID)
+		snippet := hit.StoryText
+		if len(snippet) > 300 {
+			snippet = snippet[:300] + "..."
+		}
+		items = append(items, types.SearchResultItem{
+			Title:   hit.Title,
+			URL:     itemURL,
+			Snippet: snippet,
+			Author:  hit.Author,
+			Date:    hit.CreatedAt,
+			Score:   float64(hit.Points),
+			Kind:    types.KindThread,
+			Meta: map[string]any{
+				"num_comments": hit.NumComments,
+				"external_url": hit.URL,
+			},
+		})
+	}
+
+	hasMore := raw.Page+1 < raw.NbPages
+
+	return &types.NormalizedSearchResult{
+		Items:         items,
+		Query:         "",
+		TotalEstimate: raw.NbHits,
+		Backend:       "hn_algolia",
+		HasMore:       hasMore,
+	}, nil
+}
+
+// BuildHNSearchURL constructs the Algolia HN search URL for the given query, limit, and sort.
+// sort: "relevance" → /search, "recent" → /search_by_date
+func BuildHNSearchURL(query string, limit int, sort string) string {
+	endpoint := "search"
+	if sort == "recent" {
+		endpoint = "search_by_date"
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	params := url.Values{}
+	params.Set("query", query)
+	params.Set("hitsPerPage", fmt.Sprintf("%d", limit))
+	params.Set("tags", "story")
+	return fmt.Sprintf("https://hn.algolia.com/api/v1/%s?%s", endpoint, params.Encode())
 }

@@ -112,6 +112,39 @@ func (a *redditAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult,
 	}, nil
 }
 
+// Search implements types.SearchableAdapter for Reddit via the public search.json endpoint.
+func (a *redditAdapter) Search(ctx types.SearchContext) (*types.NormalizedSearchResult, error) {
+	limit := ctx.Options.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	apiURL := backends.BuildRedditSearchURL(ctx.Query, limit, ctx.Options.Sort)
+	result, err := backends.SearchRedditPosts(apiURL, limit, ctx.Options.Sort)
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.search",
+			Reason:  types.TraceReasonFromError(err),
+			Adapter: "reddit",
+			Backend: "reddit_json",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+
+	result.Query = ctx.Query
+
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "adapter.search",
+		Reason:  types.TraceRouteMatch,
+		Adapter: "reddit",
+		Backend: "reddit_json",
+		Detail:  fmt.Sprintf("search returned %d results for %q", len(result.Items), ctx.Query),
+	})
+
+	return result, nil
+}
+
 func (a *redditAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtractResult, error) {
 	result, err := a.fetchReddit(ctx, "adapter.extract")
 	if err != nil {
@@ -133,3 +166,4 @@ func (a *redditAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtractR
 		Backend:  "reddit_json",
 	}, nil
 }
+
