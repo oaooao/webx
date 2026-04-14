@@ -30,7 +30,8 @@ func LoadAuth() (*Auth, error) {
 		return nil, types.NewWebxError(
 			types.ErrLoginRequired,
 			"TWITTER_AUTH_TOKEN and TWITTER_CT0 environment variables are required. "+
-				"Obtain them from your browser cookies on x.com after logging in.",
+				"Log in to x.com, open DevTools → Application → Cookies, copy auth_token and ct0. "+
+				"See https://github.com/oaooao/webx#twitter-setup",
 		)
 	}
 

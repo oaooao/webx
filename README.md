@@ -123,7 +123,7 @@ webx extract --kind <kind>         # required: conversation, thread, article, vi
 
 | Platform | Adapter | What you get |
 |----------|---------|--------------|
-| Twitter / X | `twitter` | Tweet text, thread, author, metrics |
+| Twitter / X | `twitter` | Tweet text, thread, author, metrics ¹ |
 | Reddit | `reddit` | Post + top comments, subreddit, score |
 | YouTube | `youtube` | Title, description, transcript (if available) |
 | Hacker News | `hn` | Post + comment tree, scores |
@@ -131,6 +131,30 @@ webx extract --kind <kind>         # required: conversation, thread, article, vi
 | Claude Share | `claude` | Full conversation as structured messages |
 | ChatGPT Share | `chatgpt` | Full conversation as structured messages |
 | Any URL | `generic` | Clean article text via Defuddle extraction |
+
+¹ Requires authentication. See [Twitter Setup](#twitter-setup) below.
+
+## Twitter Setup
+
+Twitter has no public API for reading tweets. webx uses the same internal GraphQL API that twitter.com itself uses, which requires your login cookies.
+
+**Step 1:** Log in to [x.com](https://x.com) in your browser.
+
+**Step 2:** Open DevTools (F12) → Application → Cookies → `https://x.com` and copy these two values:
+
+| Cookie name | Environment variable |
+|-------------|---------------------|
+| `auth_token` | `TWITTER_AUTH_TOKEN` |
+| `ct0` | `TWITTER_CT0` |
+
+**Step 3:** Export them in your shell:
+
+```sh
+export TWITTER_AUTH_TOKEN="your_auth_token_here"
+export TWITTER_CT0="your_ct0_here"
+```
+
+Add these to your `~/.bashrc` or `~/.zshrc` to persist across sessions. Without these variables, Twitter URLs will return a `LOGIN_REQUIRED` error with instructions.
 
 ## Output Schema
 
