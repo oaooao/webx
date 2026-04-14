@@ -6,16 +6,22 @@ package adapters
 
 import (
 	"github.com/oaooao/webx/internal/adapters/arxiv"
+	"github.com/oaooao/webx/internal/adapters/chatgpt"
+	"github.com/oaooao/webx/internal/adapters/claude"
 	"github.com/oaooao/webx/internal/adapters/generic"
 	"github.com/oaooao/webx/internal/adapters/hn"
 	"github.com/oaooao/webx/internal/adapters/reddit"
 	"github.com/oaooao/webx/internal/adapters/twitter"
+	"github.com/oaooao/webx/internal/adapters/youtube"
 	"github.com/oaooao/webx/internal/core"
 )
 
 func init() {
+	core.RegisterAdapter(claude.New())
+	core.RegisterAdapter(chatgpt.New())
 	core.RegisterAdapter(twitter.New())
 	core.RegisterAdapter(reddit.New())
+	core.RegisterAdapter(youtube.New())
 	core.RegisterAdapter(hn.New())
 	core.RegisterAdapter(arxiv.New())
 	core.RegisterAdapter(generic.New())

@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	fetchHTMLTimeout = 30 * time.Second
-	maxBodyBytes     = 10 * 1024 * 1024 // 10 MB
+	fetchHTMLTimeout    = 30 * time.Second
+	utlsFastTimeout     = 10 * time.Second // shorter timeout before falling back to std client
+	maxBodyBytes        = 10 * 1024 * 1024  // 10 MB
 )
 
 // cloudflareMarkers are substrings present in Cloudflare challenge pages.
@@ -28,16 +29,34 @@ var cloudflareMarkers = []string{
 	"challenge-platform",
 }
 
-// FetchHTML downloads the raw HTML of a URL using the shared uTLS client
-// (Chrome fingerprint) and returns the body as a string.
+// FetchHTML downloads the raw HTML of a URL with automatic fallback.
 //
-// Returns:
-//   - (html, nil)                     on success
-//   - (nil, *WebxError{ErrAntiBot})   when Cloudflare challenge detected
-//   - (nil, *WebxError{ErrFetchFailed}) on network/HTTP error
-//   - (nil, *WebxError{ErrFetchTimeout}) on timeout
+// It first tries the uTLS client (Chrome TLS fingerprint) with a short timeout.
+// If that fails due to timeout or Cloudflare blocking, it retries with Go's
+// standard HTTP client (which supports HTTP/2 natively). This handles sites
+// that detect the uTLS fingerprint mismatch (Chrome hello + HTTP/1.1-only ALPN)
+// or deploy Cloudflare challenges that the uTLS client can't solve.
 func FetchHTML(rawURL string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), fetchHTMLTimeout)
+	// Try uTLS first with a shorter timeout.
+	html, err := fetchWithUTLS(rawURL)
+	if err == nil {
+		return html, nil
+	}
+
+	// Only fallback on timeout or anti-bot errors; real 404s etc. should not retry.
+	wErr, isWebx := err.(*types.WebxError)
+	if !isWebx || (wErr.Code != types.ErrFetchTimeout && wErr.Code != types.ErrAntiBot) {
+		return "", err
+	}
+
+	// Retry with standard client (HTTP/2 capable, no TLS fingerprinting).
+	return FetchHTMLStd(rawURL)
+}
+
+// fetchWithUTLS performs a fetch using the uTLS client with Chrome fingerprint.
+// Uses utlsFastTimeout (10s) instead of the full 30s to allow quick fallback.
+func fetchWithUTLS(rawURL string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), utlsFastTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -60,11 +79,6 @@ func FetchHTML(rawURL string) (string, error) {
 		return "", types.NewWebxError(types.ErrFetchFailed, fmt.Sprintf("GET %s: %s", rawURL, err))
 	}
 	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusServiceUnavailable {
-		// Pre-emptively flag likely bot protection before reading body.
-		// We still read the body below to check for CF markers.
-	}
 
 	// Decompress if server returned gzip (auto-decompression is disabled when
 	// using a custom DialTLSContext transport like our utls client).

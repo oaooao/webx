@@ -71,17 +71,15 @@ var smokeCases = []smokeCase{
 	},
 	{
 		id:               "T-11",
-		url:              envOr("WEBX_TEST_CLAUDE_SHARE", "https://claude.ai/share/339cb5ab-e4c5-4c2c-b45d-8a2fe81ef818"),
+		url:              envOr("WEBX_TEST_CLAUDE_SHARE", "https://claude.ai/share/48088842-673f-4ef9-a867-a8add9e71549"),
 		expectedAdapter:  "claude-share",
 		acceptedBackends: []string{"claude_snapshot"},
-		skipReason:       skipIfNoEnv("WEBX_TEST_CLAUDE_SHARE", "set WEBX_TEST_CLAUDE_SHARE to a valid share URL"),
 	},
 	{
 		id:               "T-12",
-		url:              envOr("WEBX_TEST_CHATGPT_SHARE", "https://chatgpt.com/share/6786aa57-7a38-800e-92e8-87e4acebc830"),
+		url:              envOr("WEBX_TEST_CHATGPT_SHARE", "https://chatgpt.com/share/69ddbda6-a51c-83ea-af56-fa0be87039e6"),
 		expectedAdapter:  "chatgpt-share",
 		acceptedBackends: []string{"chatgpt_api", "chatgpt_html"},
-		skipReason:       skipIfNoEnv("WEBX_TEST_CHATGPT_SHARE", "set WEBX_TEST_CHATGPT_SHARE to a valid share URL"),
 	},
 	{
 		id:               "T-07",

@@ -60,7 +60,14 @@ func FetchConversation(shareURL string, shareID string) (map[string]any, string,
 
 // extractEmbeddedJSON tries to extract the conversation JSON from the HTML page.
 func extractEmbeddedJSON(html string) (map[string]any, error) {
-	// Try __NEXT_DATA__ first.
+	// Try React Router Turbo Stream first (current ChatGPT format since ~2025).
+	if data, err := extractTurboStream(html); err == nil {
+		if _, hasMapping := data["mapping"]; hasMapping {
+			return data, nil
+		}
+	}
+
+	// Try __NEXT_DATA__ (legacy format).
 	if m := nextDataRe.FindStringSubmatch(html); len(m) >= 2 {
 		data, err := drillNextData(m[1])
 		if err == nil {
