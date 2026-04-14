@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/oaooao/webx/internal/backends"
@@ -18,7 +17,7 @@ const (
 	// SearchTimelineQueryID is the GraphQL operation ID for SearchTimeline.
 	// Update from https://github.com/fa0311/twitter-openapi/blob/main/src/config/placeholder.json
 	// if requests start returning 404/422.
-	SearchTimelineQueryID = "VhUd6vHVmLBcw0uX-6jMLA"
+	SearchTimelineQueryID = "MJpyQGqgklrVl_0X9gNy3A"
 )
 
 // searchTimelineVariables is the JSON variables payload for SearchTimeline.
@@ -30,45 +29,25 @@ type searchTimelineVariables struct {
 	QuerySource string `json:"querySource"`
 }
 
-// searchTimelineFeatures mirrors the feature flags used by the web client for SearchTimeline.
-// Extracted from Twitter's main JS bundle. Missing required features cause 404.
+// searchTimelineFeatures is a minimal set of feature flags for SearchTimeline.
+// Only True-valued flags are sent — adding too many inflates URL length and
+// causes 414/431 errors. Derived from twitter-cli's working configuration.
 var searchTimelineFeatures = map[string]bool{
-	"rweb_video_screen_enabled":                                          true,
-	"profile_label_improvements_pcf_label_in_post_enabled":               true,
-	"responsive_web_profile_redirect_enabled":                            true,
-	"rweb_tipjar_consumption_enabled":                                    true,
-	"verified_phone_label_enabled":                                       true,
-	"creator_subscriptions_tweet_preview_api_enabled":                    true,
-	"responsive_web_graphql_timeline_navigation_enabled":                 true,
-	"responsive_web_graphql_skip_user_profile_image_extensions_enabled":  true,
-	"premium_content_api_read_enabled":                                   true,
-	"communities_web_enable_tweet_community_results_fetch":               true,
-	"c9s_tweet_anatomy_moderator_badge_enabled":                          true,
-	"responsive_web_grok_analyze_button_fetch_trends_enabled":            true,
-	"responsive_web_grok_analyze_post_followups_enabled":                 true,
-	"responsive_web_jetfuel_frame":                                       true,
-	"responsive_web_grok_share_attachment_enabled":                       true,
-	"responsive_web_grok_annotations_enabled":                            true,
-	"articles_preview_enabled":                                           true,
-	"responsive_web_edit_tweet_api_enabled":                              true,
-	"graphql_is_translatable_rweb_tweet_is_translatable_enabled":         true,
-	"view_counts_everywhere_api_enabled":                                 true,
-	"longform_notetweets_consumption_enabled":                            true,
-	"responsive_web_twitter_article_tweet_consumption_enabled":           true,
-	"content_disclosure_indicator_enabled":                               true,
-	"content_disclosure_ai_generated_indicator_enabled":                  true,
-	"responsive_web_grok_show_grok_translated_post":                     true,
-	"responsive_web_grok_analysis_button_from_backend":                  true,
-	"post_ctas_fetch_enabled":                                           true,
-	"freedom_of_speech_not_reach_fetch_enabled":                         true,
-	"standardized_nudges_misinfo":                                       true,
-	"tweet_with_visibility_results_prefer_gql_limited_actions_policy_enabled": true,
-	"longform_notetweets_rich_text_read_enabled":                        true,
-	"longform_notetweets_inline_media_enabled":                          true,
-	"responsive_web_grok_image_annotation_enabled":                      true,
-	"responsive_web_grok_imagine_annotation_enabled":                    true,
-	"responsive_web_grok_community_note_auto_translation_is_enabled":    true,
-	"responsive_web_enhance_cards_enabled":                              true,
+	"responsive_web_graphql_exclude_directive_enabled":           true,
+	"creator_subscriptions_tweet_preview_api_enabled":            true,
+	"responsive_web_graphql_timeline_navigation_enabled":         true,
+	"c9s_tweet_anatomy_moderator_badge_enabled":                  true,
+	"tweetypie_unmention_optimization_enabled":                   true,
+	"responsive_web_edit_tweet_api_enabled":                      true,
+	"graphql_is_translatable_rweb_tweet_is_translatable_enabled": true,
+	"view_counts_everywhere_api_enabled":                         true,
+	"longform_notetweets_consumption_enabled":                    true,
+	"responsive_web_twitter_article_tweet_consumption_enabled":   true,
+	"longform_notetweets_rich_text_read_enabled":                 true,
+	"rweb_video_timestamps_enabled":                              true,
+	"responsive_web_media_download_video_enabled":                true,
+	"freedom_of_speech_not_reach_fetch_enabled":                  true,
+	"standardized_nudges_misinfo":                                true,
 }
 
 // SearchTwitter performs a Twitter GraphQL SearchTimeline query using credentials
@@ -105,15 +84,16 @@ func SearchTwitterWithURL(apiURL, query, authToken, ct0 string, limit int, produ
 	ctx, cancel := context.WithTimeout(context.Background(), graphQLTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	// Twitter migrated SearchTimeline to POST. Build JSON body instead of URL params.
+	body := buildSearchTimelineBody(query, limit, product)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, strings.NewReader(body))
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to build request: "+err.Error())
 	}
 
 	SetChromeHeaders(req, auth)
+	req.Header.Set("Content-Type", "application/json")
 
-	// Use standard HTTP client (not uTLS) — SearchTimeline requires HTTP/2
-	// which the uTLS client's HTTP/1.1-only ALPN cannot negotiate.
 	resp, err := backends.StdClient().Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -157,12 +137,12 @@ func SearchTwitterWithURL(apiURL, query, authToken, ct0 string, limit int, produ
 	}
 
 	const maxBody = 10 * 1024 * 1024
-	body, err := io.ReadAll(io.LimitReader(reader, maxBody))
+	respBody, err := io.ReadAll(io.LimitReader(reader, maxBody))
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to read response body: "+err.Error())
 	}
 
-	tweets, err := ParseSearchTimelineResponse(json.RawMessage(body))
+	tweets, err := ParseSearchTimelineResponse(json.RawMessage(respBody))
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrBackendFailed, "failed to parse Twitter search response: "+err.Error())
 	}
@@ -175,15 +155,15 @@ func SearchTwitterWithURL(apiURL, query, authToken, ct0 string, limit int, produ
 			score = float64(tw.Metrics["favorite_count"])
 		}
 		items = append(items, types.SearchResultItem{
-			Title:   tw.Text,
-			URL:     tweetURL,
-			Author:  tw.Author.ScreenName,
-			Date:    tw.CreatedAt,
-			Score:   score,
-			Kind:    types.KindThread,
+			Title:  tw.Text,
+			URL:    tweetURL,
+			Author: tw.Author.ScreenName,
+			Date:   tw.CreatedAt,
+			Score:  score,
+			Kind:   types.KindThread,
 			Meta: map[string]any{
-				"metrics":      tw.Metrics,
-				"author_name":  tw.Author.Name,
+				"metrics":     tw.Metrics,
+				"author_name": tw.Author.Name,
 			},
 		})
 	}
@@ -279,43 +259,41 @@ func ParseSearchTimelineResponse(raw json.RawMessage) ([]Tweet, error) {
 // searchTimelineFieldToggles are required by the SearchTimeline endpoint.
 // All set to false — these control optional response fields.
 var searchTimelineFieldToggles = map[string]bool{
-	"withPayments":                  false,
-	"withAuxiliaryUserLabels":       false,
-	"withArticleRichContentState":   false,
-	"withArticlePlainText":          false,
-	"withArticleSummaryText":        false,
-	"withArticleVoiceOver":          false,
-	"withGrokAnalyze":               false,
-	"withDisallowedReplyControls":   false,
+	"withPayments":                false,
+	"withAuxiliaryUserLabels":     false,
+	"withArticleRichContentState": false,
+	"withArticlePlainText":        false,
+	"withArticleSummaryText":      false,
+	"withArticleVoiceOver":        false,
+	"withGrokAnalyze":             false,
+	"withDisallowedReplyControls": false,
 }
 
-// BuildSearchTimelineURL constructs the Twitter GraphQL SearchTimeline URL.
+// BuildSearchTimelineURL returns the base URL for SearchTimeline POST requests.
 func BuildSearchTimelineURL(query string, count int, product string) string {
-	variables := searchTimelineVariables{
-		RawQuery:    query,
-		Count:       count,
-		Product:     product,
-		QuerySource: "typed_query",
-	}
-	variablesJSON, _ := json.Marshal(variables)
+	return fmt.Sprintf("https://x.com/i/api/graphql/%s/SearchTimeline", SearchTimelineQueryID)
+}
 
+// buildSearchTimelineBody constructs the JSON body for SearchTimeline POST requests.
+func buildSearchTimelineBody(query string, count int, product string) string {
 	compactFeatures := make(map[string]bool)
 	for k, v := range searchTimelineFeatures {
 		if v {
 			compactFeatures[k] = v
 		}
 	}
-	featuresJSON, _ := json.Marshal(compactFeatures)
-	fieldTogglesJSON, _ := json.Marshal(searchTimelineFieldToggles)
 
-	params := url.Values{}
-	params.Set("variables", string(variablesJSON))
-	params.Set("features", string(featuresJSON))
-	params.Set("fieldToggles", string(fieldTogglesJSON))
+	body := map[string]any{
+		"variables": map[string]any{
+			"rawQuery":    query,
+			"count":       count,
+			"product":     product,
+			"querySource": "typed_query",
+		},
+		"features": compactFeatures,
+		"queryId":  SearchTimelineQueryID,
+	}
 
-	return fmt.Sprintf(
-		"https://x.com/i/api/graphql/%s/SearchTimeline?%s",
-		SearchTimelineQueryID, params.Encode(),
-	)
+	b, _ := json.Marshal(body)
+	return string(b)
 }
-
