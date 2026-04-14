@@ -14,6 +14,66 @@ func New() types.ExtractableAdapter {
 	return &hnAdapter{}
 }
 
+// Search implements types.SearchableAdapter for Hacker News via Algolia search API.
+func (a *hnAdapter) Search(ctx types.SearchContext) (*types.NormalizedSearchResult, error) {
+	limit := ctx.Options.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	resp, err := backends.SearchHNStories(ctx.Query, limit, ctx.Options.Sort)
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.search",
+			Reason:  types.TraceReasonFromError(err),
+			Adapter: "hacker-news",
+			Backend: "hn_algolia",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+
+	items := make([]types.SearchResultItem, 0, len(resp.Hits))
+	for _, hit := range resp.Hits {
+		itemURL := fmt.Sprintf("https://news.ycombinator.com/item?id=%s", hit.ObjectID)
+		snippet := hit.StoryText
+		if len(snippet) > 300 {
+			snippet = snippet[:300] + "..."
+		}
+		items = append(items, types.SearchResultItem{
+			Title:   hit.Title,
+			URL:     itemURL,
+			Snippet: snippet,
+			Author:  hit.Author,
+			Date:    hit.CreatedAt,
+			Score:   float64(hit.Points),
+			Kind:    types.KindThread,
+			Meta: map[string]any{
+				"num_comments":  hit.NumComments,
+				"external_url":  hit.URL,
+			},
+		})
+	}
+
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "adapter.search",
+		Reason:  types.TraceRouteMatch,
+		Adapter: "hacker-news",
+		Backend: "hn_algolia",
+		Detail:  fmt.Sprintf("search returned %d results for %q", len(items), ctx.Query),
+	})
+
+	hasMore := resp.Page+1 < resp.NbPages
+
+	return &types.NormalizedSearchResult{
+		Items:         items,
+		Query:         ctx.Query,
+		TotalEstimate: resp.NbHits,
+		Backend:       "hn_algolia",
+		HasMore:       hasMore,
+	}, nil
+}
+
 func (a *hnAdapter) ID() string { return "hacker-news" }
 
 // Priority 88: above generic adapters, below reddit (90) to keep relative order clear.
