@@ -128,6 +128,34 @@ func (a *twitterAdapter) fetchTweets(ctx types.RunContext, step string) ([]twitt
 	return tweets, title, nil
 }
 
+// Search implements types.SearchableAdapter for Twitter via GraphQL SearchTimeline.
+// Requires TWITTER_AUTH_TOKEN and TWITTER_CT0 environment variables.
+func (a *twitterAdapter) Search(ctx types.SearchContext) (*types.NormalizedSearchResult, error) {
+	result, err := twitterbe.SearchTwitter(ctx, "", "")
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.search",
+			Reason:  traceReason(err),
+			Adapter: "twitter",
+			Backend: "twitter_graphql",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+
+	result.Query = ctx.Query
+
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "adapter.search",
+		Reason:  types.TraceRouteMatch,
+		Adapter: "twitter",
+		Backend: "twitter_graphql",
+		Detail:  fmt.Sprintf("search returned %d results for %q", len(result.Items), ctx.Query),
+	})
+
+	return result, nil
+}
+
 func (a *twitterAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
 	tweets, title, err := a.fetchTweets(ctx, "adapter.read")
 	if err != nil {

@@ -26,6 +26,39 @@ func (a *youtubeAdapter) Match(ctx types.MatchContext) bool {
 		host == "m.youtube.com" || host == "youtu.be"
 }
 
+// Search implements types.SearchableAdapter for YouTube via page scraping of ytInitialData.
+func (a *youtubeAdapter) Search(ctx types.SearchContext) (*types.NormalizedSearchResult, error) {
+	limit := ctx.Options.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	apiURL := ytbe.BuildYouTubeSearchURL(ctx.Query)
+	result, err := ytbe.SearchVideos(apiURL, limit)
+	if err != nil {
+		ctx.Trace.Push(types.TraceEvent{
+			Step:    "adapter.search",
+			Reason:  types.TraceReasonFromError(err),
+			Adapter: "youtube",
+			Backend: "youtube_scrape",
+			Detail:  err.Error(),
+		})
+		return nil, err
+	}
+
+	result.Query = ctx.Query
+
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "adapter.search",
+		Reason:  types.TraceRouteMatch,
+		Adapter: "youtube",
+		Backend: "youtube_scrape",
+		Detail:  fmt.Sprintf("search returned %d results for %q", len(result.Items), ctx.Query),
+	})
+
+	return result, nil
+}
+
 func (a *youtubeAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
 	result, err := a.fetchVideo(ctx, "adapter.read")
 	if err != nil {
