@@ -9,6 +9,7 @@ import (
 
 	_ "github.com/oaooao/webx/internal/adapters"
 	"github.com/oaooao/webx/internal/core"
+	"github.com/oaooao/webx/internal/types"
 )
 
 // envOr returns the env var value or the fallback default.
@@ -108,6 +109,43 @@ var smokeCases = []smokeCase{
 	},
 }
 
+// searchSmokeCase holds parameters for a search smoke test.
+type searchSmokeCase struct {
+	id         string
+	platform   string
+	query      string
+	skipReason string
+	note       string
+}
+
+var searchSmokeCases = []searchSmokeCase{
+	{
+		id:       "S-01",
+		platform: "hacker-news",
+		query:    "golang",
+		note:     "HN search via Algolia API",
+	},
+	{
+		id:       "S-02",
+		platform: "reddit",
+		query:    "webx",
+		note:     "Reddit /search.json",
+	},
+	{
+		id:       "S-03",
+		platform: "youtube",
+		query:    "go tutorial",
+		note:     "YouTube search results page parse",
+	},
+	{
+		id:         "S-04",
+		platform:   "twitter",
+		query:      "webx",
+		skipReason: skipIfNoEnv("TWITTER_AUTH_TOKEN", "skipping: TWITTER_AUTH_TOKEN not set"),
+		note:       "Twitter GraphQL SearchTimeline (requires auth)",
+	},
+}
+
 func TestSmokeAll(t *testing.T) {
 	for _, tc := range smokeCases {
 		tc := tc // capture range variable
@@ -115,6 +153,54 @@ func TestSmokeAll(t *testing.T) {
 			t.Parallel()
 			runSmokeCase(t, tc)
 		})
+	}
+}
+
+func TestSearchSmokeAll(t *testing.T) {
+	for _, tc := range searchSmokeCases {
+		tc := tc
+		t.Run(tc.id+" Search/"+tc.platform, func(t *testing.T) {
+			t.Parallel()
+			runSearchSmokeCase(t, tc)
+		})
+	}
+}
+
+func runSearchSmokeCase(t *testing.T, tc searchSmokeCase) {
+	t.Helper()
+
+	if tc.skipReason != "" {
+		t.Skip(tc.skipReason)
+	}
+
+	env := core.RunSearch(tc.query, tc.platform, types.DefaultSearchOptions())
+
+	if !env.OK {
+		errMsg := "<nil>"
+		if env.Error != nil {
+			errMsg = env.Error.Code + ": " + env.Error.Message
+		}
+		t.Fatalf("expected ok=true, got ok=false; error=%s", errMsg)
+	}
+
+	if env.Error != nil {
+		t.Fatalf("expected no error, got %s: %s", env.Error.Code, env.Error.Message)
+	}
+
+	if env.Kind != types.KindSearch {
+		t.Errorf("kind: want %q, got %q", types.KindSearch, env.Kind)
+	}
+
+	if env.Source.Adapter != tc.platform {
+		t.Errorf("adapter: want %q, got %q", tc.platform, env.Source.Adapter)
+	}
+
+	if env.Data == nil {
+		t.Fatal("expected non-nil data")
+	}
+
+	if env.Content.Markdown == nil {
+		t.Fatal("expected non-nil markdown")
 	}
 }
 

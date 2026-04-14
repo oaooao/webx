@@ -294,3 +294,126 @@ func TestFetchRedditJSON_Non429Error_NoRetry(t *testing.T) {
 		t.Errorf("expected no retry on 500, got %d attempts", attempt)
 	}
 }
+
+// --- Reddit Search tests ---
+
+// buildRedditSearchFixture constructs a Reddit /search.json response.
+// The format is a single Listing (not the [post, comments] pair used for threads).
+func buildRedditSearchFixture() []byte {
+	return []byte(`{
+		"kind": "Listing",
+		"data": {
+			"after": "t3_xyz",
+			"children": [
+				{
+					"kind": "t3",
+					"data": {
+						"title": "Webx: a CLI tool for AI agents",
+						"author": "oaooao",
+						"score": 1337,
+						"subreddit": "golang",
+						"permalink": "/r/golang/comments/abc123/webx_a_cli_tool_for_ai_agents/",
+						"url": "https://github.com/oaooao/webx",
+						"selftext": "Just released webx...",
+						"num_comments": 25,
+						"created_utc": 1700000000
+					}
+				},
+				{
+					"kind": "t3",
+					"data": {
+						"title": "Ask HN: Best CLI tools for 2024?",
+						"author": "techuser",
+						"score": 420,
+						"subreddit": "programming",
+						"permalink": "/r/programming/comments/def456/ask_hn_best_cli_tools_for_2024/",
+						"url": "https://www.reddit.com/r/programming/comments/def456/",
+						"selftext": "",
+						"num_comments": 80,
+						"created_utc": 1699900000
+					}
+				}
+			]
+		}
+	}`)
+}
+
+func TestParseRedditSearchResponse_WhenValid_ShouldParsePosts(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildRedditSearchFixture())
+	}))
+	defer ts.Close()
+
+	result, err := SearchRedditPosts(ts.URL+"?q=webx", 20, "relevance")
+	if err != nil {
+		t.Fatalf("SearchRedditPosts: %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(result.Items))
+	}
+
+	// First result
+	item := result.Items[0]
+	if item.Title != "Webx: a CLI tool for AI agents" {
+		t.Errorf("title: got %q", item.Title)
+	}
+	if item.Author != "oaooao" {
+		t.Errorf("author: got %q", item.Author)
+	}
+	if item.Score != 1337 {
+		t.Errorf("score: got %f, want 1337", item.Score)
+	}
+	// URL should be subreddit permalink (canonical)
+	if item.URL == "" {
+		t.Error("URL should not be empty")
+	}
+	// Meta should contain subreddit
+	if item.Meta == nil {
+		t.Error("Meta should not be nil")
+	}
+	if sub, ok := item.Meta["subreddit"]; !ok || sub != "golang" {
+		t.Errorf("Meta[subreddit]: got %v, want golang", item.Meta["subreddit"])
+	}
+}
+
+func TestParseRedditSearchResponse_WhenEmpty_ShouldReturnEmptyItems(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"kind": "Listing", "data": {"children": []}}`))
+	}))
+	defer ts.Close()
+
+	result, err := SearchRedditPosts(ts.URL+"?q=xyznotexist", 20, "relevance")
+	if err != nil {
+		t.Fatalf("SearchRedditPosts: %v", err)
+	}
+	if len(result.Items) != 0 {
+		t.Errorf("expected 0 items, got %d", len(result.Items))
+	}
+}
+
+func TestParseRedditSearchResponse_WhenHTTPError_ShouldReturnError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(403)
+	}))
+	defer ts.Close()
+
+	_, err := SearchRedditPosts(ts.URL+"?q=webx", 20, "relevance")
+	if err == nil {
+		t.Error("expected error for HTTP 403")
+	}
+}
+
+func TestParseRedditSearchResponse_WhenInvalidJSON_ShouldReturnError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`not json`))
+	}))
+	defer ts.Close()
+
+	_, err := SearchRedditPosts(ts.URL+"?q=webx", 20, "relevance")
+	if err == nil {
+		t.Error("expected error for invalid JSON")
+	}
+}

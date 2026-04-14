@@ -1,6 +1,8 @@
 package backends
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -201,5 +203,117 @@ func TestRenderHNItemMarkdown_EmptyTitle(t *testing.T) {
 	md := RenderHNItemMarkdown(&item)
 	if !strings.Contains(md, "HN item 42") {
 		t.Errorf("should use fallback title with item ID: %q", md)
+	}
+}
+
+// --- HN Search tests ---
+
+// buildHNSearchResponseFixture returns a minimal Algolia search JSON response.
+func buildHNSearchResponseFixture() []byte {
+	return []byte(`{
+		"hits": [
+			{
+				"objectID": "11111",
+				"title": "Go 1.24 Released",
+				"url": "https://go.dev/blog/go1.24",
+				"author": "gopher",
+				"points": 250,
+				"created_at": "2024-02-01T10:00:00Z",
+				"num_comments": 42
+			},
+			{
+				"objectID": "22222",
+				"title": "Understanding goroutines",
+				"url": "https://example.com/goroutines",
+				"author": "devblog",
+				"points": 100,
+				"created_at": "2024-01-15T08:00:00Z",
+				"num_comments": 10
+			}
+		],
+		"nbHits": 2,
+		"page": 0,
+		"nbPages": 1,
+		"hitsPerPage": 20
+	}`)
+}
+
+func TestParseHNSearchResponse_WhenValid_ShouldParseHits(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildHNSearchResponseFixture())
+	}))
+	defer ts.Close()
+
+	result, err := SearchHNStories(ts.URL+"?query=golang", 20)
+	if err != nil {
+		t.Fatalf("SearchHNStories: %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(result.Items))
+	}
+
+	// First item
+	item := result.Items[0]
+	if item.Title != "Go 1.24 Released" {
+		t.Errorf("title: got %q, want %q", item.Title, "Go 1.24 Released")
+	}
+	// URL points to the HN item page (canonical), not the external URL
+	if item.URL != "https://news.ycombinator.com/item?id=11111" {
+		t.Errorf("URL: got %q, want HN item URL", item.URL)
+	}
+	if item.Author != "gopher" {
+		t.Errorf("author: got %q", item.Author)
+	}
+	if item.Score != 250 {
+		t.Errorf("score: got %f, want 250", item.Score)
+	}
+	// External URL should be in Meta
+	if item.Meta == nil {
+		t.Error("Meta should not be nil")
+	}
+	if externalURL, ok := item.Meta["external_url"]; !ok || externalURL != "https://go.dev/blog/go1.24" {
+		t.Errorf("Meta[external_url]: got %v, want https://go.dev/blog/go1.24", item.Meta["external_url"])
+	}
+}
+
+func TestParseHNSearchResponse_WhenEmpty_ShouldReturnEmptyItems(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"hits": [], "nbHits": 0}`))
+	}))
+	defer ts.Close()
+
+	result, err := SearchHNStories(ts.URL+"?query=xyznotexist", 20)
+	if err != nil {
+		t.Fatalf("SearchHNStories: %v", err)
+	}
+	if len(result.Items) != 0 {
+		t.Errorf("expected 0 items for empty response, got %d", len(result.Items))
+	}
+}
+
+func TestParseHNSearchResponse_WhenHTTPError_ShouldReturnError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer ts.Close()
+
+	_, err := SearchHNStories(ts.URL+"?query=golang", 20)
+	if err == nil {
+		t.Error("expected error for HTTP 500")
+	}
+}
+
+func TestParseHNSearchResponse_WhenInvalidJSON_ShouldReturnError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`not valid json`))
+	}))
+	defer ts.Close()
+
+	_, err := SearchHNStories(ts.URL+"?query=golang", 20)
+	if err == nil {
+		t.Error("expected error for invalid JSON")
 	}
 }
