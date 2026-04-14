@@ -90,10 +90,9 @@ $ webx doctor https://twitter.com/user/status/123
 {
   "ok": true,
   "kind": "thread",
-  "source": { "adapter": "twitter", "backend": "graphql" },
+  "source": { "adapter": "twitter", "backend": "pending" },
   "trace": [
-    { "step": "route", "adapter": "twitter", "ms": 1 },
-    { "step": "fetch", "backend": "graphql", "ms": 312 }
+    { "step": "route", "reason": "ROUTE_MATCH", "adapter": "twitter", "detail": "Matched adapter twitter" }
   ]
 }
 ```
@@ -128,7 +127,7 @@ webx extract --kind <kind>         # required: conversation, thread, article, vi
 | Reddit | `reddit` | Post + top comments, subreddit, score |
 | YouTube | `youtube` | Title, description, transcript (if available) |
 | Hacker News | `hn` | Post + comment tree, scores |
-| arXiv | `arxiv` | Title, authors, abstract, full PDF text |
+| arXiv | `arxiv` | Title, authors, abstract |
 | Claude Share | `claude` | Full conversation as structured messages |
 | ChatGPT Share | `chatgpt` | Full conversation as structured messages |
 | Any URL | `generic` | Clean article text via Defuddle extraction |

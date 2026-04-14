@@ -1,8 +1,8 @@
-#!/usr/bin/env sh
+#!/usr/bin/env bash
 set -euo pipefail
 
 # webx installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/oaooao/webx/master/scripts/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/oaooao/webx/master/scripts/install.sh | bash
 
 REPO="oaooao/webx"
 BINARY="webx"
@@ -60,7 +60,13 @@ curl -fsSL -o "${TMP_DIR}/checksums.txt" "${CHECKSUM_URL}"
 # Verify checksum
 echo "Verifying checksum..."
 cd "${TMP_DIR}"
-grep "${ARCHIVE}" checksums.txt | sha256sum -c -
+if command -v sha256sum > /dev/null 2>&1; then
+  grep "${ARCHIVE}" checksums.txt | sha256sum -c -
+elif command -v shasum > /dev/null 2>&1; then
+  grep "${ARCHIVE}" checksums.txt | shasum -a 256 -c -
+else
+  echo "WARNING: no sha256 tool found, skipping checksum verification" >&2
+fi
 cd - > /dev/null
 
 # Extract

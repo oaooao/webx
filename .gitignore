@@ -1,5 +1,5 @@
 # Binaries
-webx
+/webx
 *.exe
 *.exe~
 *.dll
