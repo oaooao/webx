@@ -20,7 +20,7 @@ const (
 	// Hardcoded from twitter-openapi's fallback table; if requests start
 	// returning 404/422, update from:
 	// https://github.com/fa0311/twitter-openapi/blob/main/src/config/placeholder.json
-	TweetDetailQueryID = "xIYgDwjboktoFeXe_fgacw"
+	TweetDetailQueryID = "rU08O-YiXdr0IZfE7qaUMg"
 
 	graphQLTimeout = 30 * time.Second
 )
