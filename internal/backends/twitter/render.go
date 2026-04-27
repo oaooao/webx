@@ -59,6 +59,20 @@ func RenderMarkdown(tweets []Tweet) string {
 			}
 		}
 
+		// X Article body (long-form content attached to the tweet).
+		if tweet.ArticleTitle != "" || tweet.ArticleText != "" {
+			sb.WriteString("\n")
+			if tweet.ArticleTitle != "" {
+				fmt.Fprintf(&sb, "### Article: %s\n\n", tweet.ArticleTitle)
+			} else {
+				sb.WriteString("### Article\n\n")
+			}
+			if tweet.ArticleText != "" {
+				sb.WriteString(tweet.ArticleText)
+				sb.WriteString("\n")
+			}
+		}
+
 		// Quoted tweet (inline block)
 		if qt := tweet.QuotedTweet; qt != nil {
 			sb.WriteString("\n> **Quoted:** @")

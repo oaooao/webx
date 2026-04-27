@@ -126,6 +126,43 @@ func (a *twitterAdapter) fetchTweets(ctx types.RunContext, step string) ([]twitt
 		Detail:  fmt.Sprintf("parsed %d tweets from TweetDetail GraphQL response", len(tweets)),
 	})
 
+	// X Article enrichment: TweetDetail only returns {title, preview_text}
+	// for articles. When the focal tweet has a title but empty body, fetch
+	// the full content_state via TweetResultByRestId.
+	if t := &tweets[0]; t.ArticleTitle != "" && t.ArticleText == "" {
+		articleRaw, articleErr := twitterbe.FetchArticleByTweetID(t.ID, auth)
+		if articleErr != nil {
+			ctx.Trace.Push(types.TraceEvent{
+				Step:    step + ".article",
+				Reason:  traceReason(articleErr),
+				Adapter: "twitter",
+				Backend: "twitter_graphql",
+				Detail:  "article enrich failed: " + articleErr.Error(),
+			})
+			// Non-fatal: keep the title-only article rather than failing the whole read.
+		} else if enriched, parseErr := twitterbe.ParseTweetResultByRestIdResponse(articleRaw); parseErr != nil {
+			ctx.Trace.Push(types.TraceEvent{
+				Step:    step + ".article",
+				Reason:  types.TraceBackendFailed,
+				Adapter: "twitter",
+				Backend: "twitter_graphql",
+				Detail:  "article parse error: " + parseErr.Error(),
+			})
+		} else if enriched != nil && enriched.ArticleText != "" {
+			t.ArticleText = enriched.ArticleText
+			if t.ArticleTitle == "" {
+				t.ArticleTitle = enriched.ArticleTitle
+			}
+			ctx.Trace.Push(types.TraceEvent{
+				Step:    step + ".article",
+				Reason:  types.TraceRouteMatch,
+				Adapter: "twitter",
+				Backend: "twitter_graphql",
+				Detail:  fmt.Sprintf("enriched article body via TweetResultByRestId (%d chars)", len(t.ArticleText)),
+			})
+		}
+	}
+
 	return tweets, title, nil
 }
 

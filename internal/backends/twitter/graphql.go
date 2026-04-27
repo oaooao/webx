@@ -22,6 +22,12 @@ const (
 	// https://github.com/fa0311/twitter-openapi/blob/main/src/config/placeholder.json
 	TweetDetailQueryID = "rU08O-YiXdr0IZfE7qaUMg"
 
+	// TweetResultByRestIdQueryID is the GraphQL operation ID for
+	// TweetResultByRestId. This endpoint returns a single tweet result with
+	// the full Draft.js content_state for X Articles, unlike TweetDetail
+	// which only returns {title, preview_text} for articles.
+	TweetResultByRestIdQueryID = "7xflPyRiUxGVbJd4uWmbfg"
+
 	graphQLTimeout = 30 * time.Second
 )
 
@@ -68,8 +74,6 @@ var tweetDetailFeatures = map[string]bool{
 var sharedClient = backends.NewUTLSClient()
 
 func FetchTweetDetail(tweetID string, auth *Auth) (json.RawMessage, error) {
-	client := sharedClient
-
 	variables := tweetDetailVariables{
 		FocalTweetID:                           tweetID,
 		WithRuxInjections:                      false,
@@ -80,13 +84,76 @@ func FetchTweetDetail(tweetID string, auth *Auth) (json.RawMessage, error) {
 		WithBirdwatchNotes:                     true,
 		WithVoice:                              true,
 	}
+	return doGraphQLGet(graphQLRequest{
+		Operation:    "TweetDetail",
+		QueryID:      TweetDetailQueryID,
+		Variables:    variables,
+		Features:     tweetDetailFeatures,
+		FieldToggles: nil,
+		Auth:         auth,
+	})
+}
 
-	variablesJSON, _ := json.Marshal(variables)
+// articleFeatures + articleFieldToggles request the full Draft.js
+// content_state for X Articles via TweetResultByRestId. Sourced from
+// twitter-cli/twitter_cli/client.py:fetch_article (MIT) and
+// fa0311/twitter-openapi placeholder.json.
+var articleFeatures = map[string]bool{
+	"longform_notetweets_consumption_enabled":                  true,
+	"responsive_web_twitter_article_tweet_consumption_enabled": true,
+	"longform_notetweets_rich_text_read_enabled":               true,
+	"longform_notetweets_inline_media_enabled":                 true,
+	"articles_preview_enabled":                                 true,
+	"responsive_web_graphql_exclude_directive_enabled":         true,
+}
 
-	// Only include True feature flags — omitting False values keeps URL under
-	// server limits (Twitter returns 414 if the URL is too long).
+var articleFieldToggles = map[string]bool{
+	"withArticleRichContentState": true,
+	"withArticlePlainText":        true,
+}
+
+// FetchArticleByTweetID retrieves the full X Article payload (including
+// Draft.js content_state) for a tweet that hosts long-form content.
+//
+// Returns the raw GraphQL response; caller parses via
+// ParseTweetResultByRestIdResponse.
+func FetchArticleByTweetID(tweetID string, auth *Auth) (json.RawMessage, error) {
+	variables := map[string]any{
+		"tweetId":                tweetID,
+		"withCommunity":          false,
+		"includePromotedContent": false,
+		"withVoice":              false,
+	}
+	return doGraphQLGet(graphQLRequest{
+		Operation:    "TweetResultByRestId",
+		QueryID:      TweetResultByRestIdQueryID,
+		Variables:    variables,
+		Features:     articleFeatures,
+		FieldToggles: articleFieldToggles,
+		Auth:         auth,
+	})
+}
+
+type graphQLRequest struct {
+	Operation    string
+	QueryID      string
+	Variables    any             // serialized to JSON in `variables` query param
+	Features     map[string]bool // only true values are sent
+	FieldToggles map[string]bool // optional; sent verbatim when non-empty
+	Auth         *Auth
+}
+
+// doGraphQLGet performs a Twitter/X GraphQL GET request and returns the raw
+// response body. Compact-features rule: drop false flags to keep URL under
+// the server's URI length cap (we have seen 414 otherwise).
+func doGraphQLGet(req graphQLRequest) (json.RawMessage, error) {
+	variablesJSON, err := json.Marshal(req.Variables)
+	if err != nil {
+		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to marshal variables: "+err.Error())
+	}
+
 	compactFeatures := make(map[string]bool)
-	for k, v := range tweetDetailFeatures {
+	for k, v := range req.Features {
 		if v {
 			compactFeatures[k] = v
 		}
@@ -96,23 +163,26 @@ func FetchTweetDetail(tweetID string, auth *Auth) (json.RawMessage, error) {
 	params := url.Values{}
 	params.Set("variables", string(variablesJSON))
 	params.Set("features", string(featuresJSON))
+	if len(req.FieldToggles) > 0 {
+		togglesJSON, _ := json.Marshal(req.FieldToggles)
+		params.Set("fieldToggles", string(togglesJSON))
+	}
 
 	apiURL := fmt.Sprintf(
-		"https://x.com/i/api/graphql/%s/TweetDetail?%s",
-		TweetDetailQueryID, params.Encode(),
+		"https://x.com/i/api/graphql/%s/%s?%s",
+		req.QueryID, req.Operation, params.Encode(),
 	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), graphQLTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to build request: "+err.Error())
 	}
+	SetChromeHeaders(httpReq, req.Auth)
 
-	SetChromeHeaders(req, auth)
-
-	resp, err := client.Do(req)
+	resp, err := sharedClient.Do(httpReq)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, types.NewWebxError(types.ErrFetchTimeout, "Twitter GraphQL request timed out")
@@ -138,13 +208,12 @@ func FetchTweetDetail(tweetID string, auth *Auth) (json.RawMessage, error) {
 	case http.StatusNotFound, 422:
 		return nil, types.NewWebxError(
 			types.ErrAntiBot,
-			fmt.Sprintf("Twitter returned HTTP %d — queryId may be stale. Update TweetDetailQueryID from https://github.com/fa0311/twitter-openapi", resp.StatusCode),
+			fmt.Sprintf("Twitter %s returned HTTP %d — queryId may be stale. Update from https://github.com/fa0311/twitter-openapi", req.Operation, resp.StatusCode),
 		)
 	default:
 		return nil, types.NewWebxError(types.ErrFetchFailed, "unexpected Twitter HTTP status: "+resp.Status)
 	}
 
-	// Twitter almost always gzip-encodes responses; decompress if needed.
 	var reader io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		gzr, gzErr := gzip.NewReader(resp.Body)
@@ -155,11 +224,10 @@ func FetchTweetDetail(tweetID string, auth *Auth) (json.RawMessage, error) {
 		reader = gzr
 	}
 
-	const maxTwitterBody = 10 * 1024 * 1024 // 10 MB
+	const maxTwitterBody = 10 * 1024 * 1024
 	body, err := io.ReadAll(io.LimitReader(reader, maxTwitterBody))
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to read response body: "+err.Error())
 	}
-
 	return json.RawMessage(body), nil
 }

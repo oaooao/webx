@@ -15,6 +15,8 @@ type Tweet struct {
 	ConversationID   string         `json:"conversation_id"`
 	InReplyToID      string         `json:"in_reply_to_id,omitempty"`
 	InReplyToUser    string         `json:"in_reply_to_user,omitempty"`
+	ArticleTitle     string         `json:"article_title,omitempty"`
+	ArticleText      string         `json:"article_text,omitempty"`
 }
 
 // Author holds the tweet author's display name and handle.
@@ -116,6 +118,40 @@ func ParseTweetDetailResponse(raw json.RawMessage) ([]Tweet, error) {
 	}
 
 	return tweets, nil
+}
+
+// ParseTweetResultByRestIdResponse extracts a single tweet from the
+// TweetResultByRestId GraphQL response. The path is:
+//
+//	data → tweetResult → result
+//
+// Returns nil when the structure is valid but contains no tweet.
+func ParseTweetResultByRestIdResponse(raw json.RawMessage) (*Tweet, error) {
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil, err
+	}
+	dataRaw, ok := top["data"]
+	if !ok {
+		return nil, nil
+	}
+	var data map[string]json.RawMessage
+	if err := json.Unmarshal(dataRaw, &data); err != nil {
+		return nil, err
+	}
+	trRaw, ok := data["tweetResult"]
+	if !ok {
+		return nil, nil
+	}
+	var tr map[string]json.RawMessage
+	if err := json.Unmarshal(trRaw, &tr); err != nil {
+		return nil, err
+	}
+	resultRaw, ok := tr["result"]
+	if !ok {
+		return nil, nil
+	}
+	return parseTweetResult(resultRaw), nil
 }
 
 func extractTweetsFromEntry(entryRaw json.RawMessage) []Tweet {
@@ -277,6 +313,12 @@ func parseTweetResult(resultRaw json.RawMessage) *Tweet {
 				}
 			}
 		}
+	}
+
+	// X Article (long-form Draft.js content) attached to the tweet.
+	if title, text := extractArticle(result); title != "" || text != "" {
+		tweet.ArticleTitle = title
+		tweet.ArticleText = text
 	}
 
 	// Quoted tweet — recursively parsed.
