@@ -1,6 +1,7 @@
 package youtube
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"encoding/xml"
@@ -58,6 +59,14 @@ func ExtractVideoID(rawURL string) string {
 }
 
 // FetchVideo fetches video metadata and transcript from a YouTube URL.
+//
+// Metadata comes from the watch page's ytInitialPlayerResponse (always
+// available without auth). Captions are fetched via the InnerTube /player
+// API with a 3-client fallback (iOS → Android → Web): YouTube no longer
+// returns content from the web caption track URLs, but InnerTube tracks
+// carry the right tokens. See fetchInnerTubeCaptionURL for details.
+//
+// Reference: kepano/defuddle src/extractors/youtube.ts (MIT).
 func FetchVideo(rawURL string) (*FetchResult, error) {
 	videoID := ExtractVideoID(rawURL)
 	if videoID == "" {
@@ -65,7 +74,6 @@ func FetchVideo(rawURL string) (*FetchResult, error) {
 	}
 
 	watchURL := "https://www.youtube.com/watch?v=" + videoID
-	// YouTube requires HTTP/2; use the standard client (no uTLS fingerprinting needed).
 	pageHTML, err := backends.FetchHTMLStd(watchURL)
 	if err != nil {
 		return nil, err
@@ -76,22 +84,107 @@ func FetchVideo(rawURL string) (*FetchResult, error) {
 		return nil, err
 	}
 
-	video, captionURL, err := parsePlayerResponse(playerJSON, videoID)
+	video, _, err := parsePlayerResponse(playerJSON, videoID)
 	if err != nil {
 		return nil, err
 	}
 
 	result := &FetchResult{Video: *video}
 
-	if captionURL != "" {
-		segments, err := fetchTranscript(captionURL)
-		if err == nil {
+	// Web-page captionTracks[].baseUrl returns empty body since YouTube
+	// gated /api/timedtext to authed clients. Use InnerTube instead.
+	if captionURL := fetchInnerTubeCaptionURL(videoID); captionURL != "" {
+		if segments, err := fetchTranscript(captionURL); err == nil {
 			result.Transcript = segments
 		}
 		// non-fatal: no transcript is acceptable
 	}
 
 	return result, nil
+}
+
+// InnerTube client identifiers. YouTube updates these periodically; values
+// sourced from kepano/defuddle. iOS is tried first because it doesn't
+// require a special User-Agent (works in any context). If a client returns
+// no caption tracks, we fall through to the next.
+const (
+	innerTubeAndroidUA    = "com.google.android.youtube/20.10.38 (Linux; U; Android 14)"
+	innerTubeFetchTimeout = 8 * time.Second
+)
+
+// innerTubePlayerURL is a var (not const) so tests can point it at httptest.
+var innerTubePlayerURL = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
+
+type innerTubeClient struct {
+	name      string
+	body      string
+	userAgent string // optional; only Android requires it
+}
+
+var innerTubeClients = []innerTubeClient{
+	{
+		name: "IOS",
+		body: `{"context":{"client":{"clientName":"IOS","clientVersion":"20.10.3"}},"videoId":"%s"}`,
+	},
+	{
+		name:      "ANDROID",
+		body:      `{"context":{"client":{"clientName":"ANDROID","clientVersion":"20.10.38"}},"videoId":"%s"}`,
+		userAgent: innerTubeAndroidUA,
+	},
+	{
+		name: "WEB",
+		body: `{"context":{"client":{"clientName":"WEB","clientVersion":"2.20240101.00.00"}},"videoId":"%s"}`,
+	},
+}
+
+// fetchInnerTubeCaptionURL queries the InnerTube /player API across iOS,
+// Android, and Web clients in order. Returns the first non-empty caption
+// track baseUrl found. Returns "" if no client yields captions or all
+// requests fail (caller treats absence as non-fatal).
+func fetchInnerTubeCaptionURL(videoID string) string {
+	for _, c := range innerTubeClients {
+		captionURL := tryInnerTubeClient(videoID, c)
+		if captionURL != "" {
+			return captionURL
+		}
+	}
+	return ""
+}
+
+func tryInnerTubeClient(videoID string, client innerTubeClient) string {
+	ctx, cancel := context.WithTimeout(context.Background(), innerTubeFetchTimeout)
+	defer cancel()
+
+	body := fmt.Sprintf(client.body, videoID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, innerTubePlayerURL, bytes.NewBufferString(body))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if client.userAgent != "" {
+		req.Header.Set("User-Agent", client.userAgent)
+	}
+
+	resp, err := backends.StdClient().Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024))
+	if err != nil {
+		return ""
+	}
+
+	var pr playerResponse
+	if err := json.Unmarshal(data, &pr); err != nil {
+		return ""
+	}
+	return pickCaptionURL(pr.Captions.PlayerCaptionsTracklistRenderer.CaptionTracks)
 }
 
 func extractPlayerResponse(pageHTML string) ([]byte, error) {
