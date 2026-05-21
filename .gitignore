@@ -29,6 +29,8 @@ dist/
 *.key
 *.pem
 secrets/
+auth.json
+.config/webx/
 
 # IDE
 .idea/
