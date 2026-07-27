@@ -41,3 +41,6 @@ auth.json
 # OS
 .DS_Store
 Thumbs.db
+
+# personal local context (not committed)
+CLAUDE.local.md
