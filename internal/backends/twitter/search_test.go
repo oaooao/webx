@@ -2,8 +2,10 @@ package twitter
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/oaooao/webx/internal/types"
@@ -173,14 +175,21 @@ func TestParseTwitterSearchResponse_WhenNoDataKey_ShouldReturnNil(t *testing.T) 
 }
 
 func TestSearchTwitter_WhenNoAuth_ShouldReturnError(t *testing.T) {
+	// Isolate from the developer machine: real TWITTER_* env vars or a real
+	// auth store would make LoadAuth succeed and send a live request.
+	t.Setenv("TWITTER_AUTH_TOKEN", "")
+	t.Setenv("TWITTER_CT0", "")
+	t.Setenv("WEBX_AUTH_FILE", filepath.Join(t.TempDir(), "auth.json"))
+
 	ctx := types.SearchContext{
 		Query:    "webx",
 		Platform: "twitter",
 		Options:  types.DefaultSearchOptions(),
 	}
 	_, err := SearchTwitter(ctx, "", "")
-	if err == nil {
-		t.Error("expected error when no auth token is provided")
+	var wxErr *types.WebxError
+	if !errors.As(err, &wxErr) || wxErr.Code != types.ErrLoginRequired {
+		t.Errorf("expected LOGIN_REQUIRED when no auth is available, got %v", err)
 	}
 }
 
