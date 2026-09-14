@@ -203,7 +203,7 @@ func LoadRedditAccessToken() (string, error) {
 	return "", types.NewWebxError(types.ErrLoginRequired,
 		"Reddit credentials not found. Run: webx auth add reddit\n"+
 			"Or set REDDIT_ACCESS_TOKEN environment variable.\n"+
-			"See https://github.com/oaooao/webx#reddit-setup for setup instructions.")
+			"See https://github.com/oaooao/webx#optional-direct-access-with-your-own-tokens for setup instructions.")
 }
 
 // doRedditWritePOST sends a POST request to the Reddit OAuth API with form-encoded parameters.

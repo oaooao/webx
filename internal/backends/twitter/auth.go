@@ -46,7 +46,7 @@ func LoadAuth() (*Auth, error) {
 		types.ErrLoginRequired,
 		"Twitter credentials not found. Run: webx auth add twitter\n"+
 			"Or set TWITTER_AUTH_TOKEN and TWITTER_CT0 environment variables.\n"+
-			"See https://github.com/oaooao/webx#twitter-setup",
+			"See https://github.com/oaooao/webx#optional-direct-access-with-your-own-tokens",
 	)
 }
 

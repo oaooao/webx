@@ -82,7 +82,7 @@ func authAddReddit(store *auth.FileStore) error {
 	fmt.Println("Setting up Reddit authentication.")
 	fmt.Println()
 	fmt.Println("You'll need a Reddit OAuth access token.")
-	fmt.Println("See https://github.com/oaooao/webx#reddit-setup for instructions.")
+	fmt.Println("See https://github.com/oaooao/webx#optional-direct-access-with-your-own-tokens for instructions.")
 	fmt.Println()
 
 	accessToken := promptSecret("access_token: ")

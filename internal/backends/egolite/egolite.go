@@ -181,7 +181,7 @@ func BuildScript(job Job) (string, error) {
 }
 
 // scriptTemplate runs inside ego-browser's embedded Node runtime. Lessons
-// baked in (see Atlas knowledge/ego-lite.md):
+// baked in from testing against ego-browser 0.5:
 //   - goto waits for domcontentloaded; the default "load" times out on Reddit.
 //   - cookies come from CDP Network.getCookies, which also sees httpOnly
 //     cookies such as Twitter's auth_token (document.cookie does not).
