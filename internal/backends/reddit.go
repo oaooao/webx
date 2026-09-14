@@ -81,23 +81,10 @@ type RedditCommentNode struct {
 // FetchRedditJSON fetches the .json endpoint for a Reddit URL with retries.
 // commentSort is optional: "best", "top", "new", "controversial", "old", "qa". Empty = default.
 func FetchRedditJSON(redditURL string, commentSort ...string) ([]RedditListing, error) {
-	parsedURL, err := url.Parse(redditURL)
+	jsonURL, err := redditJSONURL(redditURL, commentSort...)
 	if err != nil {
-		return nil, types.NewWebxError(types.ErrFetchFailed, err.Error())
+		return nil, err
 	}
-
-	path := strings.TrimSuffix(parsedURL.Path, "/")
-	if !strings.HasSuffix(path, ".json") {
-		parsedURL.Path = path + ".json"
-	}
-	// Add raw_json=1 to disable HTML entity encoding in responses
-	q := parsedURL.Query()
-	q.Set("raw_json", "1")
-	if len(commentSort) > 0 && commentSort[0] != "" {
-		q.Set("sort", commentSort[0])
-	}
-	parsedURL.RawQuery = q.Encode()
-	jsonURL := parsedURL.String()
 
 	var lastErr error
 	for attempt := 0; attempt < redditMaxRetries; attempt++ {
@@ -118,6 +105,27 @@ func FetchRedditJSON(redditURL string, commentSort ...string) ([]RedditListing, 
 		return nil, err // don't retry other errors
 	}
 	return nil, lastErr
+}
+
+// redditJSONURL turns a Reddit page URL into its .json endpoint.
+func redditJSONURL(redditURL string, commentSort ...string) (string, error) {
+	parsedURL, err := url.Parse(redditURL)
+	if err != nil {
+		return "", types.NewWebxError(types.ErrFetchFailed, err.Error())
+	}
+
+	path := strings.TrimSuffix(parsedURL.Path, "/")
+	if !strings.HasSuffix(path, ".json") {
+		parsedURL.Path = path + ".json"
+	}
+	// Add raw_json=1 to disable HTML entity encoding in responses
+	q := parsedURL.Query()
+	q.Set("raw_json", "1")
+	if len(commentSort) > 0 && commentSort[0] != "" {
+		q.Set("sort", commentSort[0])
+	}
+	parsedURL.RawQuery = q.Encode()
+	return parsedURL.String(), nil
 }
 
 func doRedditFetch(jsonURL string) ([]RedditListing, error) {
@@ -156,11 +164,14 @@ func doRedditFetch(jsonURL string) ([]RedditListing, error) {
 		return nil, types.NewWebxError(types.ErrFetchFailed, err.Error())
 	}
 
+	return decodeRedditListings(body)
+}
+
+func decodeRedditListings(body []byte) ([]RedditListing, error) {
 	var listings []RedditListing
 	if err := json.Unmarshal(body, &listings); err != nil {
 		return nil, types.NewWebxError(types.ErrBackendFailed, "Reddit returned invalid JSON: "+err.Error())
 	}
-
 	return listings, nil
 }
 

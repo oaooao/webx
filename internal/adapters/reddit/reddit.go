@@ -1,13 +1,18 @@
 package reddit
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/oaooao/webx/internal/backends"
+	"github.com/oaooao/webx/internal/backends/egolite"
 	"github.com/oaooao/webx/internal/types"
 )
+
+const directBackend = "reddit_json"
 
 // commentIDRe extracts the fullname from Reddit comment URLs:
 // /r/<sub>/comments/<postID>/title/<commentID>/
@@ -51,19 +56,55 @@ func extractPostID(path string) string {
 	return m[1]
 }
 
-// fetchReddit is the shared core for Read and Extract. It fetches, parses,
-// and expands the Reddit thread.
-func (a *redditAdapter) fetchReddit(ctx types.RunContext, step string) (*backends.RedditResult, error) {
-	listings, err := backends.FetchRedditJSON(ctx.URL.String())
+// Seams for tests.
+var (
+	directFetch   = backends.FetchRedditJSON
+	egoliteFetch  = backends.FetchRedditJSONViaEgoLite
+	directSearch  = backends.SearchRedditPosts
+	egoliteSearch = backends.SearchRedditPostsViaEgoLite
+)
+
+func isLoginRequired(err error) bool {
+	var wxErr *types.WebxError
+	return errors.As(err, &wxErr) && wxErr.Code == types.ErrLoginRequired
+}
+
+// fetched is a parsed Reddit thread plus how it was fetched.
+type fetched struct {
+	*backends.RedditResult
+	backend       string
+	fallbackDepth int
+}
+
+// fetchReddit is the shared core for Read and Extract. It fetches the thread
+// JSON directly, falls back to ego lite on 401/403, then parses the post and
+// comment tree.
+func (a *redditAdapter) fetchReddit(ctx types.RunContext, step string) (*fetched, error) {
+	backend, depth := directBackend, 0
+	listings, err := directFetch(ctx.URL.String())
 	if err != nil {
 		ctx.Trace.Push(types.TraceEvent{
 			Step:    step,
 			Reason:  types.TraceReasonFromError(err),
 			Adapter: "reddit",
-			Backend: "reddit_json",
+			Backend: directBackend,
 			Detail:  err.Error(),
 		})
-		return nil, err
+		if !isLoginRequired(err) {
+			return nil, err
+		}
+		backend, depth = egolite.BackendID, 1
+		listings, err = egoliteFetch(ctx.URL.String())
+		if err != nil {
+			ctx.Trace.Push(types.TraceEvent{
+				Step:    step + ".fallback",
+				Reason:  types.TraceReasonFromError(err),
+				Adapter: "reddit",
+				Backend: backend,
+				Detail:  err.Error(),
+			})
+			return nil, err
+		}
 	}
 
 	result, parseErr := backends.ParseRedditListings(listings)
@@ -72,15 +113,16 @@ func (a *redditAdapter) fetchReddit(ctx types.RunContext, step string) (*backend
 			Step:    step,
 			Reason:  types.TraceReasonFromError(parseErr),
 			Adapter: "reddit",
-			Backend: "reddit_json",
+			Backend: backend,
 			Detail:  parseErr.Error(),
 		})
 		return nil, parseErr
 	}
 
-	// Attempt to expand "more" comments (no-op in v0, best-effort, never fails).
+	// Expand "more" placeholders over the direct client. Best-effort and
+	// skipped under egolite: the direct client is the one being rejected.
 	pid := extractPostID(ctx.URL.Path)
-	if pid != "" {
+	if pid != "" && backend == directBackend {
 		backends.ExpandMoreComments(result, "t3_"+pid)
 	}
 
@@ -88,11 +130,11 @@ func (a *redditAdapter) fetchReddit(ctx types.RunContext, step string) (*backend
 		Step:    step,
 		Reason:  types.TraceRouteMatch,
 		Adapter: "reddit",
-		Backend: "reddit_json",
+		Backend: backend,
 		Detail:  fmt.Sprintf("parsed %d top-level comments", len(result.Comments)),
 	})
 
-	return result, nil
+	return &fetched{RedditResult: result, backend: backend, fallbackDepth: depth}, nil
 }
 
 func (a *redditAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
@@ -101,7 +143,7 @@ func (a *redditAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult,
 		return nil, err
 	}
 
-	markdown := backends.RenderRedditMarkdown(result)
+	markdown := backends.RenderRedditMarkdown(result.RedditResult)
 
 	title := result.Post.Title
 	if title == "" {
@@ -109,11 +151,54 @@ func (a *redditAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult,
 	}
 
 	return &types.NormalizedReadResult{
-		Title:    types.StringPtr(title),
-		Markdown: &markdown,
-		HTML:     nil,
-		Backend:  "reddit_json",
+		Title:         types.StringPtr(title),
+		Markdown:      &markdown,
+		HTML:          nil,
+		Data:          RedditReadData{Post: result.Post, Comments: readComments(result.Comments)},
+		Backend:       result.backend,
+		FallbackDepth: result.fallbackDepth,
 	}, nil
+}
+
+// RedditReadData is the structured data returned by Read: the post and its
+// comment tree as fetched (Reddit's first page, nested replies included).
+type RedditReadData struct {
+	Post     backends.RedditPost `json:"post"`
+	Comments []RedditComment     `json:"comments"`
+}
+
+// RedditComment is a clean view of one comment node, without Reddit's raw
+// replies listing.
+type RedditComment struct {
+	ID         string          `json:"id"`
+	Author     string          `json:"author"`
+	CreatedAt  string          `json:"created_at"`
+	CreatedUTC float64         `json:"created_utc"`
+	Body       string          `json:"body"`
+	Score      int             `json:"score"`
+	Depth      int             `json:"depth"`
+	Replies    []RedditComment `json:"replies"`
+}
+
+func readComments(nodes []backends.RedditCommentNode) []RedditComment {
+	out := []RedditComment{}
+	for _, n := range nodes {
+		c := n.Comment
+		if c.ID == "" || (c.Body == "" && len(c.Children) > 0) {
+			continue // "more" placeholder, not a comment
+		}
+		out = append(out, RedditComment{
+			ID:         c.ID,
+			Author:     c.Author,
+			CreatedAt:  time.Unix(int64(c.CreatedUTC), 0).UTC().Format(time.RFC3339),
+			CreatedUTC: c.CreatedUTC,
+			Body:       c.Body,
+			Score:      c.Score,
+			Depth:      c.Depth,
+			Replies:    readComments(n.Replies),
+		})
+	}
+	return out
 }
 
 // Search implements types.SearchableAdapter for Reddit via the public search.json endpoint.
@@ -124,16 +209,29 @@ func (a *redditAdapter) Search(ctx types.SearchContext) (*types.NormalizedSearch
 	}
 
 	apiURL := backends.BuildRedditSearchURL(ctx.Query, limit, ctx.Options.Sort)
-	result, err := backends.SearchRedditPosts(apiURL, limit, ctx.Options.Sort)
+	result, err := directSearch(apiURL, limit, ctx.Options.Sort)
 	if err != nil {
 		ctx.Trace.Push(types.TraceEvent{
 			Step:    "adapter.search",
 			Reason:  types.TraceReasonFromError(err),
 			Adapter: "reddit",
-			Backend: "reddit_json",
+			Backend: directBackend,
 			Detail:  err.Error(),
 		})
-		return nil, err
+		if !isLoginRequired(err) {
+			return nil, err
+		}
+		result, err = egoliteSearch(apiURL)
+		if err != nil {
+			ctx.Trace.Push(types.TraceEvent{
+				Step:    "adapter.search.fallback",
+				Reason:  types.TraceReasonFromError(err),
+				Adapter: "reddit",
+				Backend: egolite.BackendID,
+				Detail:  err.Error(),
+			})
+			return nil, err
+		}
 	}
 
 	result.Query = ctx.Query
@@ -142,7 +240,7 @@ func (a *redditAdapter) Search(ctx types.SearchContext) (*types.NormalizedSearch
 		Step:    "adapter.search",
 		Reason:  types.TraceRouteMatch,
 		Adapter: "reddit",
-		Backend: "reddit_json",
+		Backend: result.Backend,
 		Detail:  fmt.Sprintf("search returned %d results for %q", len(result.Items), ctx.Query),
 	})
 
@@ -155,7 +253,7 @@ func (a *redditAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtractR
 		return nil, err
 	}
 
-	markdown := backends.RenderRedditMarkdown(result)
+	markdown := backends.RenderRedditMarkdown(result.RedditResult)
 
 	title := result.Post.Title
 	if title == "" {
@@ -163,11 +261,12 @@ func (a *redditAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtractR
 	}
 
 	return &types.NormalizedExtractResult{
-		Title:    types.StringPtr(title),
-		Markdown: &markdown,
-		HTML:     nil,
-		Data:     RedditExtractData{Post: result.Post, Comments: result.Comments},
-		Backend:  "reddit_json",
+		Title:         types.StringPtr(title),
+		Markdown:      &markdown,
+		HTML:          nil,
+		Data:          RedditExtractData{Post: result.Post, Comments: result.Comments},
+		Backend:       result.backend,
+		FallbackDepth: result.fallbackDepth,
 	}, nil
 }
 

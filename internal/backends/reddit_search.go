@@ -78,6 +78,12 @@ func SearchRedditPosts(apiURL string, limit int, sort string) (*types.Normalized
 		return nil, types.NewWebxError(types.ErrFetchFailed, err.Error())
 	}
 
+	return redditSearchResultFromBody(body, "reddit_json")
+}
+
+// redditSearchResultFromBody converts a search.json body into search items.
+// Shared by the direct and egolite transports.
+func redditSearchResultFromBody(body []byte, backend string) (*types.NormalizedSearchResult, error) {
 	var listing redditSearchListing
 	if err := json.Unmarshal(body, &listing); err != nil {
 		return nil, types.NewWebxError(types.ErrBackendFailed, "Reddit search returned invalid JSON: "+err.Error())
@@ -119,7 +125,7 @@ func SearchRedditPosts(apiURL string, limit int, sort string) (*types.Normalized
 	return &types.NormalizedSearchResult{
 		Items:   items,
 		Query:   "",
-		Backend: "reddit_json",
+		Backend: backend,
 		HasMore: hasMore,
 	}, nil
 }
