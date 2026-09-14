@@ -13,9 +13,12 @@ type RunContext struct {
 }
 
 type NormalizedReadResult struct {
-	Title         *string
-	Markdown      *string
-	HTML          *string
+	Title    *string
+	Markdown *string
+	HTML     *string
+	// Data is optional structured content (e.g. a thread's replies) placed
+	// in the envelope's data field. Nil for plain article reads.
+	Data          any
 	Backend       string
 	FallbackDepth int
 }

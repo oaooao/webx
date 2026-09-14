@@ -141,6 +141,7 @@ func RunRead(rawURL string, requestedKind *types.WebxKind) types.WebxEnvelope {
 		OK: true, Kind: defaultKind(requestedKind, adapter), URL: rawURL,
 		Adapter: adapter.ID(), Backend: result.Backend,
 		Title: result.Title, Markdown: result.Markdown, HTML: result.HTML,
+		Data:          result.Data,
 		Trace:         trace.All(),
 		FallbackDepth: result.FallbackDepth,
 	})

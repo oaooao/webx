@@ -63,17 +63,21 @@ func SearchTwitter(ctx types.SearchContext, authToken, ct0 string) (*types.Norma
 		ct0 = auth.CT0
 	}
 
-	limit := ctx.Options.Limit
+	limit, product := searchParams(ctx.Options)
+	apiURL := BuildSearchTimelineURL(ctx.Query, limit, product)
+	return SearchTwitterWithURL(apiURL, ctx.Query, authToken, ct0, limit, product)
+}
+
+func searchParams(opts types.SearchOptions) (limit int, product string) {
+	limit = opts.Limit
 	if limit <= 0 {
 		limit = 20
 	}
-	product := "Top"
-	if ctx.Options.Sort == "recent" {
+	product = "Top"
+	if opts.Sort == "recent" {
 		product = "Latest"
 	}
-
-	apiURL := BuildSearchTimelineURL(ctx.Query, limit, product)
-	return SearchTwitterWithURL(apiURL, ctx.Query, authToken, ct0, limit, product)
+	return limit, product
 }
 
 // SearchTwitterWithURL performs a SearchTimeline request against the given apiURL.
@@ -142,7 +146,13 @@ func SearchTwitterWithURL(apiURL, query, authToken, ct0 string, limit int, produ
 		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to read response body: "+err.Error())
 	}
 
-	tweets, err := ParseSearchTimelineResponse(json.RawMessage(respBody))
+	return searchResultFromBody(json.RawMessage(respBody), query, limit, "twitter_graphql")
+}
+
+// searchResultFromBody converts a SearchTimeline response body into search
+// items. Shared by the direct and egolite transports.
+func searchResultFromBody(respBody json.RawMessage, query string, limit int, backend string) (*types.NormalizedSearchResult, error) {
+	tweets, err := ParseSearchTimelineResponse(respBody)
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrBackendFailed, "failed to parse Twitter search response: "+err.Error())
 	}
@@ -171,7 +181,7 @@ func SearchTwitterWithURL(apiURL, query, authToken, ct0 string, limit int, produ
 	return &types.NormalizedSearchResult{
 		Items:   items,
 		Query:   query,
-		Backend: "twitter_graphql",
+		Backend: backend,
 		HasMore: len(tweets) >= limit,
 	}, nil
 }

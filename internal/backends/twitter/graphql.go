@@ -74,6 +74,15 @@ var tweetDetailFeatures = map[string]bool{
 var sharedClient = backends.NewUTLSClient()
 
 func FetchTweetDetail(tweetID string, auth *Auth) (json.RawMessage, error) {
+	req := tweetDetailRequest(tweetID)
+	req.Auth = auth
+	return doGraphQLGet(req)
+}
+
+// tweetDetailRequest builds the TweetDetail operation for a focal tweet. The
+// first page of the response carries the focal tweet, its ancestors and the
+// top replies (the "first screen" of the conversation).
+func tweetDetailRequest(tweetID string) graphQLRequest {
 	variables := tweetDetailVariables{
 		FocalTweetID:                           tweetID,
 		WithRuxInjections:                      false,
@@ -84,14 +93,13 @@ func FetchTweetDetail(tweetID string, auth *Auth) (json.RawMessage, error) {
 		WithBirdwatchNotes:                     true,
 		WithVoice:                              true,
 	}
-	return doGraphQLGet(graphQLRequest{
+	return graphQLRequest{
 		Operation:    "TweetDetail",
 		QueryID:      TweetDetailQueryID,
 		Variables:    variables,
 		Features:     tweetDetailFeatures,
 		FieldToggles: nil,
-		Auth:         auth,
-	})
+	}
 }
 
 // articleFeatures + articleFieldToggles request the full Draft.js
@@ -118,20 +126,25 @@ var articleFieldToggles = map[string]bool{
 // Returns the raw GraphQL response; caller parses via
 // ParseTweetResultByRestIdResponse.
 func FetchArticleByTweetID(tweetID string, auth *Auth) (json.RawMessage, error) {
+	req := articleRequest(tweetID)
+	req.Auth = auth
+	return doGraphQLGet(req)
+}
+
+func articleRequest(tweetID string) graphQLRequest {
 	variables := map[string]any{
 		"tweetId":                tweetID,
 		"withCommunity":          false,
 		"includePromotedContent": false,
 		"withVoice":              false,
 	}
-	return doGraphQLGet(graphQLRequest{
+	return graphQLRequest{
 		Operation:    "TweetResultByRestId",
 		QueryID:      TweetResultByRestIdQueryID,
 		Variables:    variables,
 		Features:     articleFeatures,
 		FieldToggles: articleFieldToggles,
-		Auth:         auth,
-	})
+	}
 }
 
 type graphQLRequest struct {
@@ -143,35 +156,13 @@ type graphQLRequest struct {
 	Auth         *Auth
 }
 
-// doGraphQLGet performs a Twitter/X GraphQL GET request and returns the raw
-// response body. Compact-features rule: drop false flags to keep URL under
-// the server's URI length cap (we have seen 414 otherwise).
+// doGraphQLGet performs a Twitter/X GraphQL GET request over the direct uTLS
+// client and returns the raw response body.
 func doGraphQLGet(req graphQLRequest) (json.RawMessage, error) {
-	variablesJSON, err := json.Marshal(req.Variables)
+	apiURL, err := buildGraphQLURL(req)
 	if err != nil {
-		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to marshal variables: "+err.Error())
+		return nil, err
 	}
-
-	compactFeatures := make(map[string]bool)
-	for k, v := range req.Features {
-		if v {
-			compactFeatures[k] = v
-		}
-	}
-	featuresJSON, _ := json.Marshal(compactFeatures)
-
-	params := url.Values{}
-	params.Set("variables", string(variablesJSON))
-	params.Set("features", string(featuresJSON))
-	if len(req.FieldToggles) > 0 {
-		togglesJSON, _ := json.Marshal(req.FieldToggles)
-		params.Set("fieldToggles", string(togglesJSON))
-	}
-
-	apiURL := fmt.Sprintf(
-		"https://x.com/i/api/graphql/%s/%s?%s",
-		req.QueryID, req.Operation, params.Encode(),
-	)
 
 	ctx, cancel := context.WithTimeout(context.Background(), graphQLTimeout)
 	defer cancel()
@@ -230,4 +221,34 @@ func doGraphQLGet(req graphQLRequest) (json.RawMessage, error) {
 		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to read response body: "+err.Error())
 	}
 	return json.RawMessage(body), nil
+}
+
+// buildGraphQLURL renders a GraphQL GET URL. Compact-features rule: drop false
+// flags to keep URL under the server's URI length cap (we have seen 414 otherwise).
+func buildGraphQLURL(req graphQLRequest) (string, error) {
+	variablesJSON, err := json.Marshal(req.Variables)
+	if err != nil {
+		return "", types.NewWebxError(types.ErrFetchFailed, "failed to marshal variables: "+err.Error())
+	}
+
+	compactFeatures := make(map[string]bool)
+	for k, v := range req.Features {
+		if v {
+			compactFeatures[k] = v
+		}
+	}
+	featuresJSON, _ := json.Marshal(compactFeatures)
+
+	params := url.Values{}
+	params.Set("variables", string(variablesJSON))
+	params.Set("features", string(featuresJSON))
+	if len(req.FieldToggles) > 0 {
+		togglesJSON, _ := json.Marshal(req.FieldToggles)
+		params.Set("fieldToggles", string(togglesJSON))
+	}
+
+	return fmt.Sprintf(
+		"https://x.com/i/api/graphql/%s/%s?%s",
+		req.QueryID, req.Operation, params.Encode(),
+	), nil
 }

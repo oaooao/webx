@@ -217,6 +217,12 @@ func extractTweetFromItemContent(itemContentRaw json.RawMessage) *Tweet {
 		return nil
 	}
 
+	// Ads injected into the conversation carry promotedMetadata even when
+	// includePromotedContent is false; they are not replies.
+	if _, promoted := itemContent["promotedMetadata"]; promoted {
+		return nil
+	}
+
 	tweetResultsRaw, ok := itemContent["tweet_results"]
 	if !ok {
 		return nil
