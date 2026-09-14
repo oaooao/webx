@@ -1,6 +1,8 @@
 # webx
 
-URL in, content out. A unified web runtime for AI agents.
+URL in, content out. The read layer of Axiom, the author's personal agent workbench.
+
+> **Status: internal tool, not a product.** webx is maintained for one user's agents and ingestion jobs. It is public as source only: no releases, no roadmap, no support promise. Feature surface is frozen; fixes go in when they keep the read path working.
 
 ```
 $ webx read https://news.ycombinator.com/item?id=43234567
@@ -13,7 +15,7 @@ $ webx read https://news.ycombinator.com/item?id=43234567
 }
 ```
 
-webx routes any URL to the right backend, extracts clean content, and returns a consistent JSON envelope — no configuration, no browser, no API keys (except Twitter).
+webx routes a URL to the right backend, extracts clean content, and returns a consistent JSON envelope in a few hundred milliseconds, with no LLM in the loop. Public pages (HN, arXiv, GitHub, blogs, YouTube transcripts) are fetched directly. Logged-in sites (Twitter/X, Reddit) fall back to [ego lite](#logged-in-sites-via-ego-lite) when direct requests are rejected.
 
 ## Install
 
@@ -103,7 +105,7 @@ $ webx doctor https://twitter.com/user/status/123
 $ webx search "async rust" --platform hn
 $ webx search "webx" --platform reddit          # subreddit + time filter supported
 $ webx search "go tutorial" --platform youtube
-$ webx search "AI agents" --platform twitter     # requires auth
+$ webx search "AI agents" --platform twitter     # uses ego lite if no stored auth
 ```
 
 **Post, reply, react**
@@ -148,8 +150,8 @@ $ webx read https://reddit.com/r/golang/comments/abc --format markdown
 
 | Platform | Adapter | What you get |
 |----------|---------|--------------|
-| Twitter / X | `twitter` | Tweet text, thread, author, metrics ¹ |
-| Reddit | `reddit` | Post + full comment tree (with expansion), subreddit, score |
+| Twitter / X | `twitter` | Tweet text, author, metrics, first page of replies ¹ |
+| Reddit | `reddit` | Post + comment tree, subreddit, score ¹ |
 | YouTube | `youtube` | Title, description, transcript (if available) |
 | Hacker News | `hn` | Post + comment tree, scores |
 | arXiv | `arxiv` | Title, authors, abstract |
@@ -157,13 +159,25 @@ $ webx read https://reddit.com/r/golang/comments/abc --format markdown
 | ChatGPT Share | `chatgpt` | Full conversation as structured messages |
 | Any URL | `generic` | Clean article text via Defuddle extraction |
 
-¹ Requires authentication. See [Twitter Setup](#twitter-setup) below.
+¹ Reads through ego lite when direct requests are rejected. See [Logged-in sites via ego lite](#logged-in-sites-via-ego-lite).
+
+## Logged-in sites via ego lite
+
+Twitter/X and Reddit reject direct requests from scripts (401/403). webx does not fight that with exported tokens any more. Instead, when the direct backend is missing credentials or gets a 401/403, the adapter sends the same API request through **egolite**: it runs `page.fetch` inside [ego lite](https://lite.ego.app/), a Chromium browser where you are already signed in, via its `ego-browser nodejs` CLI.
+
+- Requirements: ego lite is installed and open, `ego-browser` is on `PATH` or at `~/.local/bin/ego-browser` (override with `WEBX_EGO_BROWSER`), and you are signed in to x.com / reddit.com inside ego lite.
+- Cost: the ego lite hop takes about 1–2 s (≈0.7 s process start, then a same-origin page open and the API call); a rejected direct attempt before it adds its own round trip, so a Twitter read measured 5.5 s end to end and a Reddit thread 2.7 s on 2026-09-14. No tokens leave the browser.
+- Envelope: `source.backend` is `egolite` and `meta.fallback_depth` is `1`. The skipped or rejected direct attempt is recorded in `trace`.
+- Data: `webx read` on a tweet returns `data.tweet` and `data.replies[]` (author, created_at, text, likes) from TweetDetail's first page. On a Reddit thread it returns `data.post` and `data.comments[]` as a nested tree (author, created_at, body, score).
+- Errors: if ego lite is not running, `ego-browser` is missing, or the site is not signed in, the result is `LOGIN_REQUIRED` with a message telling you to sign in inside ego lite.
+
+webx opens one Page per run in an ego lite task space named `webx` and closes it when done.
 
 ## Twitter Setup
 
-Twitter has no public API for reading tweets. webx uses the same internal GraphQL API that twitter.com itself uses, which requires your login cookies.
+Optional. Without stored credentials Twitter reads go straight to ego lite. Stored cookies only matter for write operations (post, reply, react) and for skipping the browser hop.
 
-**Option A: Use `webx auth` (recommended)**
+**Option A: Use `webx auth`**
 
 ```sh
 webx auth add twitter
@@ -182,11 +196,11 @@ export TWITTER_AUTH_TOKEN="your_auth_token_here"
 export TWITTER_CT0="your_ct0_here"
 ```
 
-webx checks the auth store first, then falls back to environment variables. Without either, Twitter URLs return a `LOGIN_REQUIRED` error with setup instructions.
+webx checks the auth store first, then environment variables. Without either, reads use ego lite; writes return `LOGIN_REQUIRED`.
 
 ## Reddit Setup
 
-Reddit read operations work without authentication. Write operations (post, comment, vote) require an OAuth2 access token:
+Reddit read operations need no credentials: the public JSON endpoint is tried first, then ego lite on 403. Write operations (post, comment, vote) require an OAuth2 access token:
 
 ```sh
 webx auth add reddit
@@ -226,23 +240,15 @@ Every response follows the same envelope:
 
 `data` contains adapter-specific structured output (e.g., conversation messages, comment trees). `trace` records each routing and fetch step for debugging.
 
-## Why webx
+## Scope
 
-Most tools solve one layer of the problem. webx solves all five:
+webx does one job for its agents: give a URL, get deterministic Markdown plus JSON quickly, with an honest error code when that is not possible. Content-extraction APIs (Jina, Firecrawl, Tavily, Exa) and agent browsers (ego lite, Vercel agent-browser) cover the general market better; webx stays small and local. Browsing, clicking and other interaction belong in ego lite, not here.
 
-|  | Route | Extract | Anti-bot | Unified output | Zero config |
-|--|-------|---------|----------|----------------|-------------|
-| **webx** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Defuddle | — | ✅ | — | — | — |
-| Jina Reader | — | ✅ | cloud | — | — |
-| wget / curl | — | — | — | — | ✅ |
-| Playwright | ✅ | — | ✅ | — | — |
-
-webx uses [uTLS](https://github.com/refraction-networking/utls) for TLS fingerprint spoofing and [go-defuddle](https://github.com/vaayne/go-defuddle) for content extraction — no headless browser required.
+Direct fetches use [uTLS](https://github.com/refraction-networking/utls) for a Chrome TLS fingerprint and [go-defuddle](https://github.com/vaayne/go-defuddle) for content extraction.
 
 ## Contributing
 
-Bug reports and pull requests are welcome. For major changes, open an issue first.
+This is an internal tool; issues and pull requests may not get a response.
 
 ```sh
 git clone https://github.com/oaooao/webx.git
