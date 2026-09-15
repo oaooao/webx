@@ -13,6 +13,7 @@ builds:
     goos:
       - linux
       - darwin
+      - windows
     goarch:
       - amd64
       - arm64
@@ -23,10 +24,14 @@ builds:
 
 archives:
   - id: webx
-    builds:
+    ids:
       - webx
+    # Must match scripts/install.sh: webx_<version>_<os>_<arch>.tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
     files:
       - README*
       - LICENSE*

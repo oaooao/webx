@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"runtime/debug"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -22,6 +24,16 @@ var rootCmd = &cobra.Command{
 	Short:   "One command to read any URL",
 	Long:    "webx is a unified web runtime for AI agents. URL in, content out.",
 	Version: version,
+}
+
+func init() {
+	// `go install ...@vX.Y.Z` builds without ldflags; fall back to the module version.
+	if version == "dev" {
+		if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
+			version = strings.TrimPrefix(info.Main.Version, "v")
+		}
+	}
+	rootCmd.Version = version
 }
 
 func main() {

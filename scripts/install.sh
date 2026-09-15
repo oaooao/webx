@@ -3,6 +3,7 @@ set -euo pipefail
 
 # webx installer
 # Usage: curl -fsSL https://raw.githubusercontent.com/oaooao/webx/master/scripts/install.sh | bash
+# Optional: WEBX_INSTALL_DIR=/some/bin to choose where the binary goes.
 
 REPO="oaooao/webx"
 BINARY="webx"
@@ -72,23 +73,19 @@ cd - > /dev/null
 # Extract
 tar -xzf "${TMP_DIR}/${ARCHIVE}" -C "${TMP_DIR}"
 
-# Determine install location
-if [ -w "/usr/local/bin" ]; then
+# Determine install location: $WEBX_INSTALL_DIR, else /usr/local/bin if writable, else ~/.local/bin.
+# Never calls sudo, so it also works unattended (CI, agents).
+if [ -n "${WEBX_INSTALL_DIR:-}" ]; then
+  INSTALL_DIR="${WEBX_INSTALL_DIR}"
+elif [ -w "/usr/local/bin" ]; then
   INSTALL_DIR="/usr/local/bin"
-elif command -v sudo > /dev/null 2>&1; then
-  INSTALL_DIR="/usr/local/bin"
-  USE_SUDO=1
 else
   INSTALL_DIR="${HOME}/.local/bin"
-  mkdir -p "${INSTALL_DIR}"
 fi
+mkdir -p "${INSTALL_DIR}"
 
 # Install binary
-if [ "${USE_SUDO:-0}" = "1" ]; then
-  sudo install -m 755 "${TMP_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
-else
-  install -m 755 "${TMP_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
-fi
+install -m 755 "${TMP_DIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
 
 echo ""
 echo "${BINARY} ${VERSION} installed to ${INSTALL_DIR}/${BINARY}"
