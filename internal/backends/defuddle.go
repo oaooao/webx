@@ -29,7 +29,12 @@ func RunDefuddle(rawURL string) (*DefuddleResult, error) {
 	if err != nil {
 		return nil, err // already a *WebxError
 	}
+	return ParseHTML(html, rawURL)
+}
 
+// ParseHTML extracts main content from already-fetched HTML with go-defuddle.
+// pageURL resolves relative links and feeds site-specific extractors.
+func ParseHTML(html, pageURL string) (*DefuddleResult, error) {
 	parser, err := defuddle.NewParser()
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrBackendFailed,
@@ -43,7 +48,7 @@ func RunDefuddle(rawURL string) (*DefuddleResult, error) {
 		Standardize: &boolTrue,
 	}
 
-	result, err := parser.Parse(html, rawURL, opts)
+	result, err := parser.Parse(html, pageURL, opts)
 	if err != nil {
 		return nil, types.NewWebxError(types.ErrBackendFailed,
 			fmt.Sprintf("defuddle: parse failed: %s", err))

@@ -1,10 +1,17 @@
 // Package generic provides a catch-all adapter for arbitrary web articles.
-// It attempts extraction via go-defuddle first; on failure, falls back to
-// the r.jina.ai reader API.
+// It extracts with go-defuddle over a direct fetch first. When that fails or
+// the content does not look like an article (see quality.go), it renders the
+// page in the user's ego lite browser, then tries the r.jina.ai reader. If no
+// attempt yields an article it returns an honest error instead of the wall.
 package generic
 
 import (
+	"errors"
+	"fmt"
+	"strings"
+
 	"github.com/oaooao/webx/internal/backends"
+	"github.com/oaooao/webx/internal/backends/egolite"
 	"github.com/oaooao/webx/internal/types"
 )
 
@@ -33,66 +40,167 @@ func (a *genericAdapter) Match(ctx types.MatchContext) bool {
 	return scheme == "http" || scheme == "https"
 }
 
-func (a *genericAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
-	rawURL := ctx.URL.String()
+// Seams for tests.
+var (
+	runDefuddle    = backends.RunDefuddle
+	readViaEgoLite = backends.ReadPageViaEgoLite
+	fetchViaJina   = backends.FetchViaJina
+)
 
-	// --- attempt 1: defuddle ---
-	defResult, err := backends.RunDefuddle(rawURL)
-	if err == nil {
+// article is a read that passed the content check.
+type article struct {
+	res           *backends.DefuddleResult
+	backend       string
+	fallbackDepth int
+}
+
+// attempt records one backend's outcome for the final error.
+type attempt struct {
+	backend string
+	err     error
+	issue   *contentIssue
+}
+
+type strategy struct {
+	backend string
+	fetch   func(rawURL string) (*backends.DefuddleResult, error)
+}
+
+var strategies = []strategy{
+	{backend: "defuddle", fetch: func(u string) (*backends.DefuddleResult, error) { return runDefuddle(u) }},
+	{backend: egolite.BackendID, fetch: func(u string) (*backends.DefuddleResult, error) { return readViaEgoLite(u) }},
+	{backend: "jina", fetch: func(u string) (*backends.DefuddleResult, error) {
+		j, err := fetchViaJina(u)
+		if err != nil {
+			return nil, err
+		}
+		return &backends.DefuddleResult{Title: j.Title, Markdown: j.Markdown}, nil
+	}},
+}
+
+// read runs the strategies in order and returns the first article that
+// passes assessContent.
+func (a *genericAdapter) read(ctx types.RunContext) (*article, error) {
+	rawURL := ctx.URL.String()
+	var attempts []attempt
+	for depth, s := range strategies {
+		step := "backend." + s.backend
+		res, err := s.fetch(rawURL)
+		if err != nil {
+			ctx.Trace.Push(types.TraceEvent{
+				Step:    step,
+				Reason:  types.TraceReasonFromError(err),
+				Adapter: adapterID,
+				Backend: s.backend,
+				Detail:  err.Error(),
+			})
+			attempts = append(attempts, attempt{backend: s.backend, err: err})
+			continue
+		}
+		if issue := assessContent(res.Title, res.Markdown); issue != nil {
+			ctx.Trace.Push(types.TraceEvent{
+				Step:    step,
+				Reason:  traceReasonForCode(issue.Code),
+				Adapter: adapterID,
+				Backend: s.backend,
+				Detail:  "content check failed: " + issue.Reason,
+			})
+			attempts = append(attempts, attempt{backend: s.backend, issue: issue})
+			continue
+		}
 		ctx.Trace.Push(types.TraceEvent{
-			Step:    "backend.defuddle",
+			Step:    step,
 			Reason:  types.TraceRouteMatch,
 			Adapter: adapterID,
-			Backend: "defuddle",
-			Detail:  "defuddle succeeded",
+			Backend: s.backend,
+			Detail:  s.backend + " succeeded",
 		})
-		return &types.NormalizedReadResult{
-			Title:         ptrOf(defResult.Title),
-			Markdown:      ptrOf(defResult.Markdown),
-			HTML:          ptrOf(defResult.HTML),
-			Backend:       "defuddle",
-			FallbackDepth: 0,
-		}, nil
+		return &article{res: res, backend: s.backend, fallbackDepth: depth}, nil
+	}
+	return nil, readFailure(ctx.URL.Hostname(), attempts)
+}
+
+// readFailure picks the most telling attempt and lists the rest.
+//
+// A content check on what the real browser rendered is the strongest
+// evidence, then the direct fetch, then jina. Without any content check, an
+// actionable code (ANTI_BOT, LOGIN_REQUIRED) from any backend wins, else the
+// direct fetch's error.
+func readFailure(host string, attempts []attempt) error {
+	if len(attempts) == 0 {
+		return types.NewWebxError(types.ErrBackendFailed, "no backend attempted")
+	}
+	primary := -1
+	for _, b := range []string{egolite.BackendID, "defuddle", "jina"} {
+		for i, at := range attempts {
+			if primary < 0 && at.backend == b && at.issue != nil {
+				primary = i
+			}
+		}
+	}
+	if primary < 0 {
+		for i, at := range attempts {
+			if c := errCode(at.err); primary < 0 && (c == types.ErrAntiBot || c == types.ErrLoginRequired) && at.backend != egolite.BackendID {
+				primary = i
+			}
+		}
+	}
+	if primary < 0 {
+		primary = 0
 	}
 
-	// log defuddle failure and try jina
-	ctx.Trace.Push(types.TraceEvent{
-		Step:    "backend.defuddle",
-		Reason:  types.TraceReasonFromError(err),
-		Adapter: adapterID,
-		Backend: "defuddle",
-		Detail:  err.Error(),
-	})
-
-	// --- attempt 2: jina fallback ---
-	jinaResult, jinaErr := backends.FetchViaJina(rawURL)
-	if jinaErr != nil {
-		ctx.Trace.Push(types.TraceEvent{
-			Step:    "backend.jina",
-			Reason:  types.TraceReasonFromError(jinaErr),
-			Adapter: adapterID,
-			Backend: "jina",
-			Detail:  jinaErr.Error(),
-		})
-		// Return the more informative of the two errors; prefer the jina error
-		// unless defuddle hit anti-bot (which jina will also struggle with).
-		return nil, jinaErr
+	p := attempts[primary]
+	var code types.ErrorCode
+	var reason string
+	if p.issue != nil {
+		code, reason = p.issue.Code, p.issue.Reason
+	} else {
+		code, reason = errCode(p.err), errMessage(p.err)
 	}
 
-	ctx.Trace.Push(types.TraceEvent{
-		Step:    "backend.jina",
-		Reason:  types.TraceRouteMatch,
-		Adapter: adapterID,
-		Backend: "jina",
-		Detail:  "jina fallback succeeded",
-	})
+	var tried []string
+	for _, at := range attempts {
+		if at.issue != nil {
+			tried = append(tried, fmt.Sprintf("%s: %s %s", at.backend, at.issue.Code, at.issue.Reason))
+		} else {
+			tried = append(tried, fmt.Sprintf("%s: %s", at.backend, at.err.Error()))
+		}
+	}
+	return types.NewWebxError(code, fmt.Sprintf("%s: %s. %s Tried %s.",
+		host, reason, suggestion(code, host), strings.Join(tried, "; ")))
+}
 
-	title := jinaResult.Title
+func errCode(err error) types.ErrorCode {
+	var wxErr *types.WebxError
+	if errors.As(err, &wxErr) {
+		return wxErr.Code
+	}
+	return types.ErrBackendFailed
+}
+
+func errMessage(err error) string {
+	var wxErr *types.WebxError
+	if errors.As(err, &wxErr) {
+		return wxErr.Message
+	}
+	return err.Error()
+}
+
+func traceReasonForCode(code types.ErrorCode) types.TraceReason {
+	return types.TraceReasonFromError(types.NewWebxError(code, ""))
+}
+
+func (a *genericAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
+	art, err := a.read(ctx)
+	if err != nil {
+		return nil, err
+	}
 	return &types.NormalizedReadResult{
-		Title:         ptrOf(title),
-		Markdown:      ptrOf(jinaResult.Markdown),
-		Backend:       "jina",
-		FallbackDepth: 1,
+		Title:         ptrOf(art.res.Title),
+		Markdown:      ptrOf(art.res.Markdown),
+		HTML:          ptrOf(art.res.HTML),
+		Backend:       art.backend,
+		FallbackDepth: art.fallbackDepth,
 	}, nil
 }
 
@@ -106,71 +214,23 @@ type ArticleExtractData struct {
 }
 
 func (a *genericAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtractResult, error) {
-	rawURL := ctx.URL.String()
-
-	// --- attempt 1: defuddle ---
-	defResult, err := backends.RunDefuddle(rawURL)
-	if err == nil {
-		ctx.Trace.Push(types.TraceEvent{
-			Step:    "backend.defuddle",
-			Reason:  types.TraceRouteMatch,
-			Adapter: adapterID,
-			Backend: "defuddle",
-			Detail:  "defuddle succeeded",
-		})
-		return &types.NormalizedExtractResult{
-			Title:    ptrOf(defResult.Title),
-			Markdown: ptrOf(defResult.Markdown),
-			HTML:     ptrOf(defResult.HTML),
-			Data: ArticleExtractData{
-				Title:       defResult.Title,
-				Author:      defResult.Author,
-				SiteName:    defResult.SiteName,
-				Description: defResult.Description,
-				Published:   defResult.Published,
-			},
-			Backend:       "defuddle",
-			FallbackDepth: 0,
-		}, nil
+	art, err := a.read(ctx)
+	if err != nil {
+		return nil, err
 	}
-
-	ctx.Trace.Push(types.TraceEvent{
-		Step:    "backend.defuddle",
-		Reason:  types.TraceReasonFromError(err),
-		Adapter: adapterID,
-		Backend: "defuddle",
-		Detail:  err.Error(),
-	})
-
-	// --- attempt 2: jina fallback ---
-	jinaResult, jinaErr := backends.FetchViaJina(rawURL)
-	if jinaErr != nil {
-		ctx.Trace.Push(types.TraceEvent{
-			Step:    "backend.jina",
-			Reason:  types.TraceReasonFromError(jinaErr),
-			Adapter: adapterID,
-			Backend: "jina",
-			Detail:  jinaErr.Error(),
-		})
-		return nil, jinaErr
-	}
-
-	ctx.Trace.Push(types.TraceEvent{
-		Step:    "backend.jina",
-		Reason:  types.TraceRouteMatch,
-		Adapter: adapterID,
-		Backend: "jina",
-		Detail:  "jina fallback succeeded",
-	})
-
 	return &types.NormalizedExtractResult{
-		Title:    ptrOf(jinaResult.Title),
-		Markdown: ptrOf(jinaResult.Markdown),
+		Title:    ptrOf(art.res.Title),
+		Markdown: ptrOf(art.res.Markdown),
+		HTML:     ptrOf(art.res.HTML),
 		Data: ArticleExtractData{
-			Title: jinaResult.Title,
+			Title:       art.res.Title,
+			Author:      art.res.Author,
+			SiteName:    art.res.SiteName,
+			Description: art.res.Description,
+			Published:   art.res.Published,
 		},
-		Backend:       "jina",
-		FallbackDepth: 1,
+		Backend:       art.backend,
+		FallbackDepth: art.fallbackDepth,
 	}, nil
 }
 
