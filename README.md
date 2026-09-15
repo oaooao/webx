@@ -47,9 +47,31 @@ webx reads. It does not click, scroll, or fill forms; for interactive browsing, 
 
 ## Install
 
-webx is a single Go binary. It runs on macOS and Linux. The ego lite fallback for X and Reddit works on macOS only, because ego lite is a Mac app.
+webx is a single Go binary with no runtime dependencies. It runs on macOS and Linux; Windows builds are published but not yet tested. The ego lite fallback for X and Reddit works on macOS only, because ego lite is a Mac app.
 
-### With `go install` (recommended)
+### With the install script (macOS, Linux)
+
+No Go needed. The script downloads the latest release archive for your OS and CPU, verifies it against `checksums.txt`, and installs `webx`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/oaooao/webx/master/scripts/install.sh | bash
+```
+
+It installs to `/usr/local/bin` if you can write there, otherwise to `~/.local/bin`. It never calls `sudo`. To pick the directory yourself, set `WEBX_INSTALL_DIR`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/oaooao/webx/master/scripts/install.sh | WEBX_INSTALL_DIR="$HOME/bin" bash
+```
+
+If the script prints a `NOTE` that the directory is not on your `PATH`, add the `export` line it shows to your shell profile. Then check it works:
+
+```sh
+webx --version
+```
+
+You should see `webx version 0.2.0` or newer.
+
+### With `go install`
 
 Requires Go 1.26 or newer ([download Go](https://go.dev/dl/)).
 
@@ -63,13 +85,9 @@ The binary lands in `$(go env GOPATH)/bin`, usually `~/go/bin`. If `webx` is not
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
-Check it works:
+### From a release archive (including Windows)
 
-```sh
-webx --help
-```
-
-You should see the command list (`read`, `search`, `extract`, `doctor`, `auth`, ...).
+Download the archive for your platform from the [latest release](https://github.com/oaooao/webx/releases/latest): `webx_<version>_<os>_<arch>.tar.gz` for macOS and Linux, `.zip` for Windows, with `amd64` and `arm64` for each. Compare its SHA-256 with the line in `checksums.txt`, unpack it, and move `webx` (or `webx.exe`) onto your `PATH`.
 
 ### From source
 
@@ -81,16 +99,6 @@ go build -o webx ./cmd/webx
 ```
 
 Move `./webx` anywhere on your `PATH`, for example `~/.local/bin/`.
-
-### As a standalone binary
-
-Prebuilt release archives are not published yet. To get a self-contained binary for another machine, cross-compile it from a clone; the result has no runtime dependencies:
-
-```sh
-CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -o webx-darwin-arm64 ./cmd/webx   # Apple silicon Mac
-CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -o webx-darwin-amd64 ./cmd/webx   # Intel Mac
-CGO_ENABLED=0 GOOS=linux  GOARCH=amd64 go build -o webx-linux-amd64  ./cmd/webx   # Linux x86-64
-```
 
 ## Set up ego lite (for X and Reddit)
 
@@ -305,6 +313,13 @@ export WEBX_EGO_BROWSER=/path/to/ego-browser
 git clone https://github.com/oaooao/webx.git
 cd webx
 go test ./...
+```
+
+To cut a release, tag the commit and let GoReleaser build the archives and `checksums.txt` (archive names must stay in sync with `scripts/install.sh`):
+
+```sh
+git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z
+GITHUB_TOKEN="$(gh auth token)" goreleaser release --clean
 ```
 
 Direct fetches use [uTLS](https://github.com/refraction-networking/utls) for a Chrome TLS fingerprint and [go-defuddle](https://github.com/vaayne/go-defuddle) for content extraction. Issues and pull requests are welcome; response times are best effort.
