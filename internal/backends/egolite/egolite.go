@@ -235,6 +235,19 @@ try {
 `
 
 func parseOutput(streams ...[]byte) (*scriptOutput, error) {
+	line, err := lastResultLine(streams...)
+	if err != nil {
+		return nil, err
+	}
+	var out scriptOutput
+	if err := json.Unmarshal(line, &out); err != nil {
+		return nil, fmt.Errorf("invalid result JSON: %w", err)
+	}
+	return &out, nil
+}
+
+// lastResultLine returns the JSON payload after the last result marker.
+func lastResultLine(streams ...[]byte) ([]byte, error) {
 	var last []byte
 	for _, stream := range streams {
 		for _, line := range bytes.Split(stream, []byte("\n")) {
@@ -246,11 +259,7 @@ func parseOutput(streams ...[]byte) (*scriptOutput, error) {
 	if last == nil {
 		return nil, errors.New("no result line in ego-browser output")
 	}
-	var out scriptOutput
-	if err := json.Unmarshal(bytes.TrimSpace(last), &out); err != nil {
-		return nil, fmt.Errorf("invalid result JSON: %w", err)
-	}
-	return &out, nil
+	return bytes.TrimSpace(last), nil
 }
 
 func loginHint(job Job) string {
