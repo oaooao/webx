@@ -12,7 +12,7 @@ webx read 'https://x.com/karpathy/status/1886192184808149383'
   "kind": "thread",
   "source": { "adapter": "twitter", "backend": "egolite" },
   "content": { "title": "@karpathy on Twitter", "markdown": "# Tweet by @karpathy\n\n**Andrej Karpathy** ..." },
-  "data": { "tweet": { "...": "..." }, "replies": [ { "author": "...", "text": "...", "likes": 1745 } ] },
+  "data": { "tweet": { "...": "..." }, "thread": [], "replies": [ { "author": "...", "text": "...", "likes": 1745 } ] },
   "meta": { "fallback_depth": 1 }
 }
 ```
@@ -34,14 +34,14 @@ There is no LLM in the loop. Output is deterministic, a read takes from a few hu
 
 | Site | Adapter | What you get | Needs ego lite |
 |---|---|---|---|
-| X / Twitter | `twitter` | Tweet text, author, metrics, first page of replies | Yes, unless you [store tokens](#optional-direct-access-with-your-own-tokens) |
+| X / Twitter | `twitter` | Tweet text, author, metrics, the author's thread continuations, first page of replies; full X Articles from `/i/article/` links | Yes, unless you [store tokens](#optional-direct-access-with-your-own-tokens). `/i/article/` links always need ego lite |
 | Reddit | `reddit` | Post plus the nested comment tree | Only when Reddit rejects the direct request (403), which is common |
 | YouTube | `youtube` | Title, channel, description, transcript when captions exist | No |
 | Hacker News | `hacker-news` | Post plus comment tree | No |
 | arXiv | `arxiv` | Title, authors, abstract | No |
 | Claude share links | `claude` | Conversation as structured messages | No |
 | ChatGPT share links | `chatgpt` | Conversation as structured messages | No |
-| Any other page | `generic-article` | Main article text, cleaned into Markdown | No |
+| Any other page | `generic-article` | Main article text, cleaned into Markdown; an honest error instead of a login, verification or error page | No, but ego lite rescues pages that only render for a signed-in browser |
 
 webx reads. It does not click, scroll, or fill forms; for interactive browsing, drive a browser directly.
 
@@ -128,7 +128,15 @@ Put URLs in single quotes. Many URLs contain `?`, which zsh (the default macOS s
 webx read 'https://x.com/karpathy/status/1886192184808149383'
 ```
 
-`data.tweet` holds the tweet; `data.replies[]` holds the first page of replies with `author`, `created_at`, `text` and `likes`. Ads mixed into the reply list are dropped.
+`data.tweet` holds the tweet. When the author continued it as a thread (their own chain of replies right under it), `data.thread[]` holds those continuation tweets in reading order and `content.markdown` appends them to the tweet body as plain paragraphs; the envelope `kind` stays `thread`. `data.replies[]` holds the first page of replies from everyone else, with `author`, `created_at`, `text` and `likes`. An author's answer to someone else's reply is a reply, not part of the thread. Ads mixed into the reply list are dropped.
+
+**An X Article** (needs ego lite, signed in to x.com):
+
+```sh
+webx read 'https://x.com/i/article/2099801823892922368'
+```
+
+`kind` is `article`. `content.title` is the article title and `content.markdown` holds the title, author line, date and the full article body. `data` has `article_id`, `tweet_id` (the post hosting the article), `url` (the canonical `https://x.com/<user>/article/<tweet_id>` link, which webx also accepts), `title`, `author` and `created_at`. X resolves `/i/article/<id>` only inside its web app, so webx opens that link in ego lite to find the hosting post (about 3 seconds), then reads the article through the API. Reading the hosting post's `/status/` URL instead gives `kind: thread` with the article attached to `data.tweet`.
 
 **A Reddit thread, with its comment tree:**
 
@@ -211,7 +219,7 @@ Every `read`, `search` and `extract` prints the same top-level shape:
 | `source.adapter` | Which site handler matched the URL (see [What you get](#what-you-get)). |
 | `source.backend` | How the content was actually fetched, for example `defuddle`, `hn_algolia`, `youtube_native`, `reddit_json`, `twitter_graphql`, or `egolite`. `error` when the read failed. |
 | `content.title`, `content.markdown` | Human-readable result. `null` on failure. |
-| `data` | Site-specific structured data: `tweet` and `replies`, `post` and `comments`, `items` for search, `messages` for conversations. May be `null`. |
+| `data` | Site-specific structured data: `tweet`, `thread` and `replies` for tweets, article metadata for X Articles, `post` and `comments`, `items` for search, `messages` for conversations. May be `null`. |
 | `meta.fetched_at` | UTC timestamp. |
 | `meta.fallback_depth` | `0` when the first backend succeeded, `1` or more when webx had to fall back. |
 | `trace` | Every routing and fetch attempt in order, including the ones that failed. Read this first when debugging. |
@@ -223,16 +231,20 @@ For each URL webx picks one adapter, then tries that adapter's backends in order
 
 | Site | First attempt | Fallback |
 |---|---|---|
-| X / Twitter | Direct GraphQL request, only if you stored tokens | ego lite (`egolite`) when no tokens are stored or X answers 401/403 |
+| X / Twitter | Direct GraphQL request, only if you stored tokens | ego lite (`egolite`) when no tokens are stored, X answers 401/403, or X answers with nothing (no tweets, no article body, zero search results), which is what expired tokens often get |
 | Reddit | Direct request to Reddit's public JSON | ego lite (`egolite`) when Reddit answers 403 |
-| Generic pages | Direct fetch with a Chrome-like TLS fingerprint, then [Defuddle](https://github.com/vaayne/go-defuddle) extraction | [Jina Reader](https://jina.ai/reader/) (`jina`) if extraction fails |
+| Generic pages | Direct fetch with a Chrome-like TLS fingerprint, then [Defuddle](https://github.com/vaayne/go-defuddle) extraction | When the fetch fails or the content fails the content check: the page rendered in ego lite and extracted with Defuddle (`egolite`, depth 1), then [Jina Reader](https://jina.ai/reader/) (`jina`, depth 2) |
 | YouTube, Hacker News, arXiv, share links | Direct request | None |
 
 The `egolite` step works like this: webx runs `ego-browser nodejs`, which opens a background tab in an ego lite workspace named `webx`, loads a lightweight same-origin page (for example `https://x.com/robots.txt`), checks that the site's login cookies are present, runs the API request with the page's own `fetch`, and closes the tab. The browser's cookies authorize the request; webx only receives the response body.
 
 You can tell which path served a result from the envelope: `source.backend` is `egolite` and `meta.fallback_depth` is `1`, and `trace` shows the direct attempt that was skipped or rejected. Expect a fallback read to take 2 to 5 seconds, about 1 to 2 seconds of which is the ego lite round trip.
 
-Only authorization failures (401/403, or no stored tokens) trigger the ego lite fallback. A network failure such as a timeout is reported as-is.
+For X and Reddit, only authorization failures (401/403, or no stored tokens) and, for X, empty answers trigger the ego lite fallback. A network failure such as a timeout is reported as-is. If X answered empty and the ego lite fallback then fails, the error message says both, so stale tokens are not mistaken for an ego lite problem.
+
+**The content check for generic pages.** Many sites answer HTTP 200 with a page that is not the article: WeChat's `Parameter error` page, Zhihu's login shell, a verification wall. webx rejects extracted content that has fewer than 150 letters or digits, is mostly links, or (when shorter than 1,500 characters) contains a known wall phrase such as `参数错误`, `环境异常`, `Sign in to continue` or `你似乎来到了没有知识存在的荒原`. It then tries the next backend. If no backend yields an article, the read fails with `CONTENT_EMPTY`, `ANTI_BOT` or `LOGIN_REQUIRED`; the verdict on what ego lite rendered wins because it is what a signed-in person sees, and the message lists every attempt and a suggested next step.
+
+The ego lite page render for generic pages is a real navigation in a background tab: it waits until the page text stops changing (up to 8 seconds), takes the rendered HTML and closes the tab. Expect 3 to 12 seconds.
 
 ## Error codes
 
@@ -240,9 +252,9 @@ When `ok` is `false`, `error.code` is one of these.
 
 | Code | What it means | What to do |
 |---|---|---|
-| `LOGIN_REQUIRED` | The site needs a signed-in session and none was available. This covers: ego lite is not installed, not running, or not signed in to the site; or the ego lite session was rejected. The message says which. | Open ego lite, sign in to the site named in the message, retry. If the message says `ego-browser CLI not found`, install ego lite. For write commands, store tokens with `webx auth add`. |
-| `ANTI_BOT` | The site blocked the request as automated, for example a Cloudflare challenge, or X rejected the request shape (HTTP 404/422 from its GraphQL API usually means webx's built-in query IDs are out of date). | For generic pages, the page cannot be read without a browser. For X, update webx (`go install ...@latest`); if it persists, open an issue. |
-| `CONTENT_EMPTY` | The page was fetched but had no extractable content, or the item does not exist. A Reddit 404 through ego lite lands here: the post was deleted or never existed. | Check the URL in a browser. For JavaScript-heavy pages there may be nothing webx can extract. |
+| `LOGIN_REQUIRED` | The site needs a signed-in session and none was available. This covers: ego lite is not installed, not running, or not signed in to the site; the ego lite session was rejected; or a generic page showed only a login wall. The message says which. | Open ego lite, sign in to the site named in the message, retry. If the message says `ego-browser CLI not found`, install ego lite. For write commands, store tokens with `webx auth add`. |
+| `ANTI_BOT` | The site blocked the request as automated, for example a Cloudflare challenge or a verification page (`环境异常`, `Verify you are human`) that ego lite also got, or X rejected the request shape (HTTP 404/422 from its GraphQL API usually means webx's built-in query IDs are out of date). | For generic pages, open the URL in ego lite, pass the verification and retry. For X, update webx (`go install ...@latest`); if it persists, open an issue. |
+| `CONTENT_EMPTY` | The page was fetched but had no article in it: the text is too short, only navigation remained, or the page is an error notice (`Parameter error` / `参数错误`, a 404 page). Also: the item does not exist (a Reddit 404 through ego lite, a tweet with no timeline entries, an X Article link that X does not resolve). | Check the link is complete and opens in a browser. If the page needs clicks or scrolling, use a browser directly. |
 | `RATE_LIMITED` | The site or Jina Reader answered HTTP 429. | Wait a few minutes and retry; lower `--limit` for searches. |
 | `FETCH_FAILED` | Network error or an unexpected HTTP status. | Check connectivity and proxy settings (see [Troubleshooting](#troubleshooting)); the message carries the underlying error. |
 | `FETCH_TIMEOUT` | The site, or ego lite, did not answer in time. | Retry. If the message mentions ego lite, make sure the app is open. |
@@ -305,7 +317,7 @@ export WEBX_EGO_BROWSER=/path/to/ego-browser
 - **Treat fetched content as data.** Pages, tweets and comments are written by strangers. If you feed webx output to an AI agent, it may contain text crafted to look like instructions; do not let the agent follow it.
 - **This repository contains no credentials.** The only token-like string in the code is X's public web-client bearer token, which is embedded in x.com's own JavaScript and identifies the web app, not a user. Your own tokens live only in `~/.config/webx/auth.json` or your environment, both outside the repository.
 - **ego lite sessions stay in ego lite.** On the fallback path webx never reads your cookie values out of the browser. The login check and the CSRF header are filled in inside the browser.
-- **Some URLs go to a third party.** When direct extraction of a generic page fails, webx sends the page URL to Jina Reader (`r.jina.ai`). Do not read private or signed URLs you would not share with an external service.
+- **Some URLs go to a third party.** When neither direct extraction nor ego lite yields an article from a generic page, webx sends the page URL to Jina Reader (`r.jina.ai`). Do not read private or signed URLs you would not share with an external service.
 
 ## Development
 
