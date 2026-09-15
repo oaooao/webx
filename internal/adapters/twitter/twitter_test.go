@@ -108,8 +108,8 @@ func TestAdapterMeta(t *testing.T) {
 	}
 
 	kinds := a.Kinds()
-	if len(kinds) != 2 {
-		t.Fatalf("Kinds: expected 2, got %d", len(kinds))
+	if len(kinds) != 3 {
+		t.Fatalf("Kinds: expected 3, got %d", len(kinds))
 	}
 	foundThread, foundMetadata := false, false
 	for _, k := range kinds {

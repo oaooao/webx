@@ -1,6 +1,7 @@
 package core
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/oaooao/webx/internal/types"
@@ -536,5 +537,31 @@ func TestRunPost_WhenWriteError_ShouldReturnErrorEnvelope(t *testing.T) {
 	}
 	if env.Error.Code != string(types.ErrRateLimited) {
 		t.Fatalf("expected RATE_LIMITED, got %s", env.Error.Code)
+	}
+}
+
+// urlKindAdapter reports article for /article/ paths, thread otherwise.
+type urlKindAdapter struct{ mockAdapter }
+
+func (u *urlKindAdapter) KindFor(ctx types.MatchContext) types.WebxKind {
+	if strings.Contains(ctx.URL.Path, "/article/") {
+		return types.KindArticle
+	}
+	return ""
+}
+
+func TestRunRead_URLKindAdapterSetsKindUnlessRequested(t *testing.T) {
+	ResetRegistry()
+	RegisterAdapter(&urlKindAdapter{mockAdapter{id: "x", priority: 100, kinds: []types.WebxKind{types.KindThread, types.KindArticle}, hostname: "example.com"}})
+
+	if env := RunRead("https://example.com/i/article/1", nil); env.Kind != types.KindArticle {
+		t.Errorf("article URL kind = %q, want article", env.Kind)
+	}
+	if env := RunRead("https://example.com/status/1", nil); env.Kind != types.KindThread {
+		t.Errorf("status URL kind = %q, want thread (adapter default)", env.Kind)
+	}
+	thread := types.KindThread
+	if env := RunRead("https://example.com/i/article/1", &thread); env.Kind != types.KindThread {
+		t.Errorf("requested kind must win, got %q", env.Kind)
 	}
 }

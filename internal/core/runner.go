@@ -20,9 +20,14 @@ func makeMatchContext(rawURL string, requestedKind *types.WebxKind) (types.Match
 	}, nil
 }
 
-func defaultKind(requestedKind *types.WebxKind, adapter types.Adapter) types.WebxKind {
+func defaultKind(requestedKind *types.WebxKind, adapter types.Adapter, ctx types.MatchContext) types.WebxKind {
 	if requestedKind != nil {
 		return *requestedKind
+	}
+	if ka, ok := adapter.(types.URLKindAdapter); ok && ctx.URL != nil {
+		if k := ka.KindFor(ctx); k != "" {
+			return k
+		}
 	}
 	kinds := adapter.Kinds()
 	if len(kinds) > 0 {
@@ -73,7 +78,7 @@ func RunDoctor(rawURL string, requestedKind *types.WebxKind) types.WebxEnvelope 
 	})
 
 	return types.MakeEnvelope(types.EnvelopeInput{
-		OK: true, Kind: defaultKind(requestedKind, adapter), URL: rawURL,
+		OK: true, Kind: defaultKind(requestedKind, adapter, ctx), URL: rawURL,
 		Adapter: adapter.ID(), Backend: "pending",
 		Data:  map[string]any{"matched": adapter.ID()},
 		Trace: trace.All(),
@@ -130,7 +135,7 @@ func RunRead(rawURL string, requestedKind *types.WebxKind) types.WebxEnvelope {
 			code = string(wxErr.Code)
 		}
 		return types.MakeEnvelope(types.EnvelopeInput{
-			OK: false, Kind: defaultKind(requestedKind, adapter), URL: rawURL,
+			OK: false, Kind: defaultKind(requestedKind, adapter, ctx), URL: rawURL,
 			Adapter: adapter.ID(), Backend: "error",
 			Trace: trace.All(),
 			Error: &types.EnvelopeError{Code: code, Message: readErr.Error()},
@@ -138,7 +143,7 @@ func RunRead(rawURL string, requestedKind *types.WebxKind) types.WebxEnvelope {
 	}
 
 	return types.MakeEnvelope(types.EnvelopeInput{
-		OK: true, Kind: defaultKind(requestedKind, adapter), URL: rawURL,
+		OK: true, Kind: defaultKind(requestedKind, adapter, ctx), URL: rawURL,
 		Adapter: adapter.ID(), Backend: result.Backend,
 		Title: result.Title, Markdown: result.Markdown, HTML: result.HTML,
 		Data:          result.Data,
@@ -196,7 +201,7 @@ func RunExtract(rawURL string, requestedKind *types.WebxKind) types.WebxEnvelope
 			Detail:  "Adapter does not implement Extract()",
 		})
 		return types.MakeEnvelope(types.EnvelopeInput{
-			OK: false, Kind: defaultKind(requestedKind, adapter), URL: rawURL,
+			OK: false, Kind: defaultKind(requestedKind, adapter, ctx), URL: rawURL,
 			Adapter: adapter.ID(), Backend: "none",
 			Trace: trace.All(),
 			Error: &types.EnvelopeError{Code: string(types.ErrUnsupportedKind), Message: adapter.ID() + " does not support extract()"},
@@ -212,7 +217,7 @@ func RunExtract(rawURL string, requestedKind *types.WebxKind) types.WebxEnvelope
 			code = string(wxErr.Code)
 		}
 		return types.MakeEnvelope(types.EnvelopeInput{
-			OK: false, Kind: defaultKind(requestedKind, adapter), URL: rawURL,
+			OK: false, Kind: defaultKind(requestedKind, adapter, ctx), URL: rawURL,
 			Adapter: adapter.ID(), Backend: "error",
 			Trace: trace.All(),
 			Error: &types.EnvelopeError{Code: code, Message: extractErr.Error()},
@@ -220,7 +225,7 @@ func RunExtract(rawURL string, requestedKind *types.WebxKind) types.WebxEnvelope
 	}
 
 	return types.MakeEnvelope(types.EnvelopeInput{
-		OK: true, Kind: defaultKind(requestedKind, adapter), URL: rawURL,
+		OK: true, Kind: defaultKind(requestedKind, adapter, ctx), URL: rawURL,
 		Adapter: adapter.ID(), Backend: result.Backend,
 		Title: result.Title, Markdown: result.Markdown, HTML: result.HTML,
 		Data:          result.Data,

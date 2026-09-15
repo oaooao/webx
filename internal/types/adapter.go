@@ -32,6 +32,14 @@ type NormalizedExtractResult struct {
 	FallbackDepth int
 }
 
+// URLKindAdapter is implemented by adapters whose default kind depends on
+// the URL (the twitter adapter reads /status/ links as threads and
+// /i/article/ links as articles). The runner uses it when the caller did not
+// request a kind; other adapters default to the first of Kinds().
+type URLKindAdapter interface {
+	KindFor(ctx MatchContext) WebxKind
+}
+
 type Adapter interface {
 	ID() string
 	Priority() int

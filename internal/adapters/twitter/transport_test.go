@@ -38,7 +38,13 @@ func conversationFixture() json.RawMessage {
 func stubTransports(t *testing.T) {
 	t.Helper()
 	oldLoad, oldDirect, oldEgo := loadAuth, directTweetDetail, egoliteTweetDetail
-	t.Cleanup(func() { loadAuth, directTweetDetail, egoliteTweetDetail = oldLoad, oldDirect, oldEgo })
+	oldDirectArticle, oldEgoArticle, oldRender := directArticle, egoliteArticle, renderPage
+	oldDirectSearch, oldEgoSearch := directSearch, egoliteSearch
+	t.Cleanup(func() {
+		loadAuth, directTweetDetail, egoliteTweetDetail = oldLoad, oldDirect, oldEgo
+		directArticle, egoliteArticle, renderPage = oldDirectArticle, oldEgoArticle, oldRender
+		directSearch, egoliteSearch = oldDirectSearch, oldEgoSearch
+	})
 }
 
 func readCtx(t *testing.T) types.RunContext {

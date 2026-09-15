@@ -6,6 +6,7 @@
 package twitter
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -34,7 +35,16 @@ func New() types.ExtractableAdapter {
 func (a *twitterAdapter) ID() string         { return "twitter" }
 func (a *twitterAdapter) Priority() int       { return 90 }
 func (a *twitterAdapter) Kinds() []types.WebxKind {
-	return []types.WebxKind{types.KindThread, types.KindMetadata}
+	return []types.WebxKind{types.KindThread, types.KindArticle, types.KindMetadata}
+}
+
+// KindFor implements types.URLKindAdapter: X Article links are articles,
+// everything else is a thread.
+func (a *twitterAdapter) KindFor(ctx types.MatchContext) types.WebxKind {
+	if _, ok := parseArticleRef(ctx.URL.Path); ok {
+		return types.KindArticle
+	}
+	return types.KindThread
 }
 
 // Match returns true for x.com and twitter.com URLs.
@@ -57,7 +67,7 @@ func tweetID(ctx types.MatchContext) string {
 // thread is the parsed TweetDetail conversation plus how it was fetched.
 type thread struct {
 	tweets    []twitterbe.Tweet
-	focal     int // index of the requested tweet in tweets
+	conv      twitterbe.Conversation
 	title     string
 	transport transport
 }
@@ -75,24 +85,29 @@ func (a *twitterAdapter) fetchTweets(ctx types.RunContext, step string) (*thread
 			Detail:  "URL does not contain a /status/<id> path: " + ctx.URL.String(),
 		})
 		return nil, types.NewWebxError(types.ErrNoMatch,
-			"URL does not point to a tweet (no /status/<id> found): "+ctx.URL.String())
+			"URL does not point to a tweet (no /status/<id> or /i/article/<id> found): "+ctx.URL.String())
 	}
 
-	tr, raw, err := fetchTweetDetail(ctx, step, id)
+	tr, tweets, err := fetchWithFallback(ctx.Trace, step, "tweets",
+		func(auth *twitterbe.Auth) (json.RawMessage, error) { return directTweetDetail(id, auth) },
+		func() (json.RawMessage, error) { return egoliteTweetDetail(id) },
+		func(raw json.RawMessage) ([]twitterbe.Tweet, error) {
+			tweets, err := twitterbe.ParseTweetDetailResponse(raw)
+			if err != nil {
+				ctx.Trace.Push(types.TraceEvent{
+					Step:    step,
+					Reason:  types.TraceBackendFailed,
+					Adapter: "twitter",
+					Detail:  "parse error: " + err.Error(),
+				})
+				return nil, types.NewWebxError(types.ErrBackendFailed, "failed to parse Twitter response: "+err.Error())
+			}
+			return tweets, nil
+		},
+		func(tweets []twitterbe.Tweet) bool { return len(tweets) == 0 },
+	)
 	if err != nil {
 		return nil, err
-	}
-
-	tweets, err := twitterbe.ParseTweetDetailResponse(raw)
-	if err != nil {
-		ctx.Trace.Push(types.TraceEvent{
-			Step:    step,
-			Reason:  types.TraceBackendFailed,
-			Adapter: "twitter",
-			Backend: tr.backend,
-			Detail:  "parse error: " + err.Error(),
-		})
-		return nil, types.NewWebxError(types.ErrBackendFailed, "failed to parse Twitter response: "+err.Error())
 	}
 
 	if len(tweets) == 0 {
@@ -103,20 +118,14 @@ func (a *twitterAdapter) fetchTweets(ctx types.RunContext, step string) (*thread
 			Backend: tr.backend,
 			Detail:  "GraphQL response contained no tweet entries",
 		})
-		return nil, types.NewWebxError(types.ErrContentEmpty, "no tweets found in Twitter GraphQL response")
+		return nil, types.NewWebxError(types.ErrContentEmpty, "no tweets found in Twitter GraphQL response: the tweet may be deleted, private or age-restricted")
 	}
 
-	focal := 0
-	for i, t := range tweets {
-		if t.ID == id {
-			focal = i
-			break
-		}
-	}
+	conv := twitterbe.SplitConversation(tweets, id)
 
 	title := "Tweet"
-	if tweets[focal].Author.ScreenName != "" {
-		title = fmt.Sprintf("@%s on Twitter", tweets[focal].Author.ScreenName)
+	if conv.Focal.Author.ScreenName != "" {
+		title = fmt.Sprintf("@%s on Twitter", conv.Focal.Author.ScreenName)
 	}
 
 	ctx.Trace.Push(types.TraceEvent{
@@ -124,13 +133,14 @@ func (a *twitterAdapter) fetchTweets(ctx types.RunContext, step string) (*thread
 		Reason:  types.TraceRouteMatch,
 		Adapter: "twitter",
 		Backend: tr.backend,
-		Detail:  fmt.Sprintf("parsed %d tweets (%d replies) from TweetDetail GraphQL response", len(tweets), len(tweets)-focal-1),
+		Detail: fmt.Sprintf("parsed %d tweets (%d thread continuations, %d replies) from TweetDetail GraphQL response",
+			len(tweets), len(conv.Thread), len(conv.Replies)),
 	})
 
 	// X Article enrichment: TweetDetail only returns {title, preview_text}
 	// for articles. When the focal tweet has a title but empty body, fetch
 	// the full content_state via TweetResultByRestId.
-	if t := &tweets[focal]; t.ArticleTitle != "" && t.ArticleText == "" {
+	if t := &conv.Focal; t.ArticleTitle != "" && t.ArticleText == "" {
 		articleRaw, articleErr := tr.article(t.ID)
 		if articleErr != nil {
 			ctx.Trace.Push(types.TraceEvent{
@@ -154,6 +164,11 @@ func (a *twitterAdapter) fetchTweets(ctx types.RunContext, step string) (*thread
 			if t.ArticleTitle == "" {
 				t.ArticleTitle = enriched.ArticleTitle
 			}
+			for i := range tweets {
+				if tweets[i].ID == t.ID {
+					tweets[i] = *t
+				}
+			}
 			ctx.Trace.Push(types.TraceEvent{
 				Step:    step + ".article",
 				Reason:  types.TraceRouteMatch,
@@ -164,7 +179,7 @@ func (a *twitterAdapter) fetchTweets(ctx types.RunContext, step string) (*thread
 		}
 	}
 
-	return &thread{tweets: tweets, focal: focal, title: title, transport: tr}, nil
+	return &thread{tweets: tweets, conv: conv, title: title, transport: tr}, nil
 }
 
 // Search implements types.SearchableAdapter for Twitter via GraphQL SearchTimeline.
@@ -189,11 +204,14 @@ func (a *twitterAdapter) Search(ctx types.SearchContext) (*types.NormalizedSearc
 }
 
 // TwitterReadData is the structured data returned by Read: the focal tweet,
-// the conversation above it, and the first page of replies below it.
+// the conversation above it, the author's thread continuations and the first
+// page of replies below it.
 type TwitterReadData struct {
 	Tweet     twitterbe.Tweet   `json:"tweet"`
 	Ancestors []twitterbe.Tweet `json:"ancestors,omitempty"`
-	Replies   []TwitterReply    `json:"replies"`
+	// Thread is the author's own continuation tweets, in reading order.
+	Thread  []twitterbe.Tweet `json:"thread"`
+	Replies []TwitterReply    `json:"replies"`
 }
 
 // TwitterReply is a flat view of one reply for downstream consumers.
@@ -211,11 +229,12 @@ type TwitterReply struct {
 
 func readData(th *thread) TwitterReadData {
 	data := TwitterReadData{
-		Tweet:     th.tweets[th.focal],
-		Ancestors: th.tweets[:th.focal],
+		Tweet:     th.conv.Focal,
+		Ancestors: th.conv.Ancestors,
+		Thread:    append([]twitterbe.Tweet{}, th.conv.Thread...),
 		Replies:   []TwitterReply{},
 	}
-	for _, t := range th.tweets[th.focal+1:] {
+	for _, t := range th.conv.Replies {
 		data.Replies = append(data.Replies, TwitterReply{
 			ID:          t.ID,
 			URL:         fmt.Sprintf("https://x.com/%s/status/%s", authorOrI(t), t.ID),
@@ -239,12 +258,26 @@ func authorOrI(t twitterbe.Tweet) string {
 }
 
 func (a *twitterAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
+	if ref, ok := parseArticleRef(ctx.URL.Path); ok {
+		art, err := a.fetchArticle(ctx, "adapter.read", ref)
+		if err != nil {
+			return nil, err
+		}
+		return &types.NormalizedReadResult{
+			Title:         &art.title,
+			Markdown:      &art.markdown,
+			Data:          art.data,
+			Backend:       art.transport.backend,
+			FallbackDepth: art.transport.fallbackDepth,
+		}, nil
+	}
+
 	th, err := a.fetchTweets(ctx, "adapter.read")
 	if err != nil {
 		return nil, err
 	}
 
-	markdown := twitterbe.RenderMarkdown(th.tweets)
+	markdown := twitterbe.RenderConversationMarkdown(th.conv)
 
 	return &types.NormalizedReadResult{
 		Title:         &th.title,
@@ -257,12 +290,26 @@ func (a *twitterAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult
 }
 
 func (a *twitterAdapter) Extract(ctx types.RunContext) (*types.NormalizedExtractResult, error) {
+	if ref, ok := parseArticleRef(ctx.URL.Path); ok {
+		art, err := a.fetchArticle(ctx, "adapter.extract", ref)
+		if err != nil {
+			return nil, err
+		}
+		return &types.NormalizedExtractResult{
+			Title:         &art.title,
+			Markdown:      &art.markdown,
+			Data:          art.data,
+			Backend:       art.transport.backend,
+			FallbackDepth: art.transport.fallbackDepth,
+		}, nil
+	}
+
 	th, err := a.fetchTweets(ctx, "adapter.extract")
 	if err != nil {
 		return nil, err
 	}
 
-	markdown := twitterbe.RenderMarkdown(th.tweets)
+	markdown := twitterbe.RenderConversationMarkdown(th.conv)
 
 	return &types.NormalizedExtractResult{
 		Title:         &th.title,
