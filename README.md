@@ -20,8 +20,10 @@ webx read 'https://x.com/karpathy/status/1886192184808149383'
 There is no LLM in the loop. Output is deterministic, a read takes from a few hundred milliseconds to a few seconds, and when content cannot be fetched webx returns an error code that tells you what to do next.
 
 - [What you get](#what-you-get)
+- [Requirements](#requirements)
 - [Install](#install)
 - [Set up ego lite (for X and Reddit)](#set-up-ego-lite-for-x-and-reddit)
+- [Let an agent do the setup](#let-an-agent-do-the-setup)
 - [Three-minute tour](#three-minute-tour)
 - [The JSON envelope](#the-json-envelope)
 - [How the fallback chain works](#how-the-fallback-chain-works)
@@ -45,9 +47,19 @@ There is no LLM in the loop. Output is deterministic, a read takes from a few hu
 
 webx reads. It does not click, scroll, or fill forms; for interactive browsing, drive a browser directly.
 
+## Requirements
+
+webx is a single static Go binary: no runtime, no shared libraries, no companion service. Installing it installs everything it needs, and the only thing you might have to add is a browser.
+
+Reading public pages (articles, YouTube, Hacker News, arXiv, Claude and ChatGPT share links) needs nothing else. Reading X or Reddit needs macOS plus the free [ego lite](https://lite.ego.app/) browser, installed, running and signed in; [Set up ego lite](#set-up-ego-lite-for-x-and-reddit) walks through it. Posting, replying and reacting need your own site credentials, stored with [`webx auth add`](#optional-direct-access-with-your-own-tokens).
+
+Whatever you read, your network has to reach the site. X and Reddit are fetched either from inside your browser's session in ego lite or, when you have stored tokens, directly; a network that cannot open x.com cannot read X through webx either way.
+
+> **Good to know:** Asked to go through a proxy, webx is deliberately inconsistent. Reddit's JSON, Hacker News, YouTube and Jina Reader honor `HTTPS_PROXY`; the fingerprinted fetch it tries first for a generic page connects directly and does not. That first attempt fails on a proxy-only network, and the read then falls through to rendering the page in ego lite, and after that to Jina Reader, both of which can get through. [Troubleshooting](#troubleshooting) has the detail.
+
 ## Install
 
-webx is a single Go binary with no runtime dependencies. It runs on macOS and Linux; Windows builds are published but not yet tested. The ego lite fallback for X and Reddit works on macOS only, because ego lite is a Mac app.
+webx runs on macOS and Linux; Windows builds are published but not yet tested. The ego lite fallback for X and Reddit works on macOS only, because ego lite is a Mac app.
 
 ### With the install script (macOS, Linux)
 
@@ -69,11 +81,11 @@ If the script prints a `NOTE` that the directory is not on your `PATH`, add the 
 webx --version
 ```
 
-You should see `webx version 0.2.0` or newer.
+You should see `webx version 0.3.0` or newer.
 
 ### With `go install`
 
-Requires Go 1.26 or newer ([download Go](https://go.dev/dl/)).
+Requires Go 1.26.1 or newer ([download Go](https://go.dev/dl/)).
 
 ```sh
 go install github.com/oaooao/webx/cmd/webx@latest
@@ -106,7 +118,13 @@ Skip this section if you only read public pages (articles, YouTube, Hacker News,
 
 [ego lite](https://lite.ego.app/) is a free Chromium-based browser for macOS that lets programs on your Mac act inside it with your logged-in sessions. It ships a command-line tool, `ego-browser`. webx uses that tool to send the same API request X or Reddit's own web page would send, from inside the browser where you are already signed in. Your cookies never leave the browser and webx never stores them.
 
-1. **Download and install.** Go to [lite.ego.app](https://lite.ego.app/), click **Download for Mac**, open the DMG and install the app.
+1. **Download and install.** Go to [lite.ego.app](https://lite.ego.app/), click **Download for Mac**, open the DMG and install the app. You should end up with ego lite in your Applications folder.
+
+   The same step has a command-line path, which picks the build for your CPU, installs the app to `/Applications` and clears the quarantine flag so Gatekeeper does not block the first launch:
+
+   ```sh
+   curl -fsSL https://raw.githubusercontent.com/citrolabs/ego-lite/main/skills/ego-browser/scripts/install.sh | sh
+   ```
 2. **Open ego lite and finish onboarding.** Onboarding installs the `ego-browser` command, normally at `~/.local/bin/ego-browser`, and offers to import your Chrome profile.
 3. **Confirm the CLI is installed.** In a new terminal:
 
@@ -117,6 +135,17 @@ Skip this section if you only read public pages (articles, YouTube, Hacker News,
    You should see a version line such as `ego-browser 0.5.0.32`. If the command is not found, see [Troubleshooting](#troubleshooting).
 4. **Sign in to the sites you want to read.** In ego lite, open [x.com](https://x.com) and sign in, then open [reddit.com](https://www.reddit.com) and sign in. If you imported your Chrome profile and were already signed in there, you may already be done. Public Reddit threads also work without signing in; X requires it.
 5. **Keep ego lite running.** webx talks to the running app. It does not need to be in the foreground.
+
+## Let an agent do the setup
+
+If you use a coding agent such as Claude Code or Codex, hand it this file instead of following it yourself. Paste this:
+
+> Install webx and set up its X and Reddit dependency for me.
+> Read https://raw.githubusercontent.com/oaooao/webx/master/README.md and follow its Install and "Set up ego lite" sections.
+> On macOS, run the ego lite install script too, then stop and tell me what I have to finish by hand in the app.
+> Prove it works by running `webx read 'https://x.com/karpathy/status/1886192184808149383'` and showing me the tweet text.
+
+One step cannot be delegated. ego lite's onboarding runs in the app's own window and registers the `ego-browser` command, so your agent has to hand that back to you. Everything before and after it is scriptable.
 
 ## Three-minute tour
 
