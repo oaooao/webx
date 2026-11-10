@@ -77,10 +77,15 @@ func RunDoctor(rawURL string, requestedKind *types.WebxKind) types.WebxEnvelope 
 		Detail:  "Matched adapter " + adapter.ID(),
 	})
 
+	data := map[string]any{"matched": adapter.ID()}
+	if da, ok := adapter.(types.DiagnosableAdapter); ok {
+		data["backends"] = da.Backends(ctx)
+	}
+
 	return types.MakeEnvelope(types.EnvelopeInput{
 		OK: true, Kind: defaultKind(requestedKind, adapter, ctx), URL: rawURL,
 		Adapter: adapter.ID(), Backend: "pending",
-		Data:  map[string]any{"matched": adapter.ID()},
+		Data:  data,
 		Trace: trace.All(),
 	})
 }

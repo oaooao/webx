@@ -40,6 +40,23 @@ type URLKindAdapter interface {
 	KindFor(ctx MatchContext) WebxKind
 }
 
+// BackendStatus is one entry of an adapter's backend chain as reported by
+// `webx doctor`: which backend, in what order it is tried, and whether its
+// local prerequisites (credentials, a helper CLI) are in place. Ready does
+// not mean the backend will succeed; doctor makes no network requests.
+type BackendStatus struct {
+	Backend string `json:"backend"`
+	Order   int    `json:"order"`
+	Ready   bool   `json:"ready"`
+	Detail  string `json:"detail"`
+}
+
+// DiagnosableAdapter is implemented by adapters that can describe their
+// backend chain for `webx doctor`.
+type DiagnosableAdapter interface {
+	Backends(ctx MatchContext) []BackendStatus
+}
+
 type Adapter interface {
 	ID() string
 	Priority() int
