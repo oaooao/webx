@@ -250,7 +250,7 @@ func doMutationPOST(apiURL string, body []byte, auth *Auth) (json.RawMessage, er
 		if ctx.Err() != nil {
 			return nil, types.NewWebxError(types.ErrFetchTimeout, "Twitter mutation request timed out")
 		}
-		errStr := err.Error()
+		errStr := requestErrorString(err)
 		if strings.Contains(errStr, "handshake") || strings.Contains(errStr, "tls") {
 			return nil, types.NewWebxError(types.ErrTLSBlocked, "TLS error: "+errStr)
 		}

@@ -46,9 +46,9 @@ var (
 )
 
 // fetchWithFallback runs one read operation over the transport chain: direct
-// first, egolite when direct has no credentials, is rejected with 401/403, or
-// answers but yields nothing (stale TWITTER_* credentials can get HTTP 200
-// with an empty timeline). parse turns a raw body into T; empty reports
+// first, egolite when direct has no credentials, is rejected with 401/403,
+// cannot reach x.com (see shouldFallBack), or answers but yields nothing
+// (stale TWITTER_* credentials can get HTTP 200 with an empty timeline). parse turns a raw body into T; empty reports
 // whether T is unusable. what names the result for messages ("tweets").
 func fetchWithFallback[T any](
 	trace *types.TraceBuffer, step, what string,
@@ -59,6 +59,7 @@ func fetchWithFallback[T any](
 ) (transport, T, error) {
 	var zero T
 	directEmpty := false
+	var directErr error
 
 	auth, authErr := loadAuth()
 	if authErr == nil {
@@ -87,9 +88,10 @@ func fetchWithFallback[T any](
 				Backend: directBackend,
 				Detail:  err.Error(),
 			})
-			if !isLoginRequired(err) {
+			if !shouldFallBack(err) {
 				return transport{}, zero, err
 			}
+			directErr = err
 		}
 	} else {
 		trace.Push(types.TraceEvent{
@@ -113,6 +115,8 @@ func fetchWithFallback[T any](
 		})
 		if directEmpty {
 			err = afterEmptyDirect(err, what)
+		} else if directErr != nil && !isLoginRequired(directErr) {
+			err = afterFailedDirect(directErr, err)
 		}
 		return transport{}, zero, err
 	}
@@ -132,6 +136,19 @@ func afterEmptyDirect(err error, what string) error {
 	}
 	return types.NewWebxError(wxErr.Code,
 		"direct Twitter backend returned no "+what+" (TWITTER_AUTH_TOKEN / TWITTER_CT0 may be stale) and the egolite fallback failed: "+wxErr.Message)
+}
+
+// afterFailedDirect reports both failures when the direct backend could not
+// reach x.com and the egolite fallback failed too, so the network error that
+// started the chain is not hidden behind an ego lite message. The code is
+// the direct one: fixing the network is usually the shorter path.
+func afterFailedDirect(directErr, fallbackErr error) error {
+	var d *types.WebxError
+	if !errors.As(directErr, &d) {
+		return fallbackErr
+	}
+	return types.NewWebxError(d.Code,
+		"direct Twitter backend failed ("+d.Message+") and the egolite fallback failed too: "+fallbackErr.Error())
 }
 
 // searchWithFallback is the same chain for SearchTimeline. Direct search
@@ -159,10 +176,11 @@ func searchWithFallback(ctx types.SearchContext) (*types.NormalizedSearchResult,
 			Backend: directBackend,
 			Detail:  err.Error(),
 		})
-		if !isLoginRequired(err) {
+		if !shouldFallBack(err) {
 			return nil, err
 		}
 	}
+	directErr := err
 
 	result, err = egoliteSearch(ctx)
 	if err != nil {
@@ -175,9 +193,30 @@ func searchWithFallback(ctx types.SearchContext) (*types.NormalizedSearchResult,
 		})
 		if directEmpty {
 			err = afterEmptyDirect(err, "search results")
+		} else if directErr != nil && !isLoginRequired(directErr) {
+			err = afterFailedDirect(directErr, err)
 		}
 	}
 	return result, err
+}
+
+// shouldFallBack reports whether a direct-backend error is worth retrying
+// through egolite: the stored session was rejected, or the request never got
+// a usable answer from x.com (network failure after retries, timeout, TLS
+// fingerprint block). ego lite reaches x.com through a real browser with its
+// own connection, so it often succeeds where the direct client did not. Rate
+// limits and stale queryIds are not retried there: they come from the same
+// account and the same API.
+func shouldFallBack(err error) bool {
+	var wxErr *types.WebxError
+	if !errors.As(err, &wxErr) {
+		return false
+	}
+	switch wxErr.Code {
+	case types.ErrLoginRequired, types.ErrFetchFailed, types.ErrFetchTimeout, types.ErrTLSBlocked:
+		return true
+	}
+	return false
 }
 
 func isLoginRequired(err error) bool {

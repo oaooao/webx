@@ -2,6 +2,7 @@ package twitter
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	twitterbe "github.com/oaooao/webx/internal/backends/twitter"
@@ -157,5 +158,40 @@ func TestRead_WhenEgoLiteNotLoggedIn_ReturnsLoginRequired(t *testing.T) {
 	_, err := New().Read(readCtx(t))
 	if !isLoginRequired(err) {
 		t.Fatalf("expected LOGIN_REQUIRED, got %v", err)
+	}
+}
+
+func TestRead_WhenDirectCannotReachX_FallsBackToEgoLite(t *testing.T) {
+	stubTransports(t)
+	loadAuth = func() (*twitterbe.Auth, error) { return &twitterbe.Auth{AuthToken: "a", CT0: "b"}, nil }
+	directTweetDetail = func(string, *twitterbe.Auth) (json.RawMessage, error) {
+		return nil, types.NewWebxError(types.ErrFetchFailed, "request failed: connection reset by peer (after 3 attempts)")
+	}
+	egoliteTweetDetail = func(string) (json.RawMessage, error) { return conversationFixture(), nil }
+	res, err := New().Read(readCtx(t))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if res.Backend != "egolite" || res.FallbackDepth != 1 {
+		t.Errorf("backend=%q depth=%d", res.Backend, res.FallbackDepth)
+	}
+}
+
+func TestRead_WhenDirectAndEgoLiteBothFail_ReportsBoth(t *testing.T) {
+	stubTransports(t)
+	loadAuth = func() (*twitterbe.Auth, error) { return &twitterbe.Auth{AuthToken: "a", CT0: "b"}, nil }
+	directTweetDetail = func(string, *twitterbe.Auth) (json.RawMessage, error) {
+		return nil, types.NewWebxError(types.ErrFetchFailed, "connection reset by peer")
+	}
+	egoliteTweetDetail = func(string) (json.RawMessage, error) {
+		return nil, types.NewWebxError(types.ErrBackendUnavailable, "ego lite is not running")
+	}
+	_, err := New().Read(readCtx(t))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "FETCH_FAILED") || !strings.Contains(msg, "connection reset") || !strings.Contains(msg, "ego lite is not running") {
+		t.Errorf("err = %q", msg)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -157,32 +158,72 @@ type graphQLRequest struct {
 }
 
 // doGraphQLGet performs a Twitter/X GraphQL GET request over the direct uTLS
-// client and returns the raw response body.
+// client and returns the raw response body. GraphQL GETs are idempotent, so
+// transient failures (a reset or refused connection, HTTP 5xx) are retried
+// after each delay in retryDelays before the error is returned. Timeouts are
+// not retried: one already cost graphQLTimeout.
 func doGraphQLGet(req graphQLRequest) (json.RawMessage, error) {
 	apiURL, err := buildGraphQLURL(req)
 	if err != nil {
 		return nil, err
 	}
 
+	return withRetry(func() (json.RawMessage, error, bool) { return graphQLGetOnce(req, apiURL) })
+}
+
+// withRetry runs attempt until it succeeds, fails non-transiently, or the
+// delays in retryDelays run out.
+func withRetry(attempt func() (json.RawMessage, error, bool)) (json.RawMessage, error) {
+	for n := 0; ; n++ {
+		raw, err, transient := attempt()
+		if err == nil || !transient || n >= len(retryDelays) {
+			if err != nil && n > 0 {
+				err = withAttempts(err, n+1)
+			}
+			return raw, err
+		}
+		sleep(retryDelays[n])
+	}
+}
+
+// retryDelays are the waits before each retry of a transient GraphQL GET
+// failure. A test seam, like sleep.
+var (
+	retryDelays = []time.Duration{500 * time.Millisecond, 1500 * time.Millisecond}
+	sleep       = time.Sleep
+)
+
+// withAttempts notes in a WebxError's message how many attempts were made.
+func withAttempts(err error, attempts int) error {
+	var wxErr *types.WebxError
+	if !errors.As(err, &wxErr) {
+		return err
+	}
+	return types.NewWebxError(wxErr.Code, fmt.Sprintf("%s (after %d attempts)", wxErr.Message, attempts))
+}
+
+// graphQLGetOnce makes one attempt. transient reports whether the failure is
+// worth retrying.
+func graphQLGetOnce(req graphQLRequest, apiURL string) (json.RawMessage, error, bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), graphQLTimeout)
 	defer cancel()
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 	if err != nil {
-		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to build request: "+err.Error())
+		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to build request: "+err.Error()), false
 	}
 	SetChromeHeaders(httpReq, req.Auth)
 
 	resp, err := sharedClient.Do(httpReq)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil, types.NewWebxError(types.ErrFetchTimeout, "Twitter GraphQL request timed out")
+			return nil, types.NewWebxError(types.ErrFetchTimeout, "Twitter GraphQL request timed out"), false
 		}
-		errStr := err.Error()
+		errStr := requestErrorString(err)
 		if strings.Contains(errStr, "handshake") || strings.Contains(errStr, "tls") {
-			return nil, types.NewWebxError(types.ErrTLSBlocked, "TLS error connecting to Twitter: "+errStr)
+			return nil, types.NewWebxError(types.ErrTLSBlocked, "TLS error connecting to Twitter: "+errStr), false
 		}
-		return nil, types.NewWebxError(types.ErrFetchFailed, "request failed: "+errStr)
+		return nil, types.NewWebxError(types.ErrFetchFailed, "request failed: "+errStr), true
 	}
 	defer resp.Body.Close()
 
@@ -193,23 +234,23 @@ func doGraphQLGet(req graphQLRequest) (json.RawMessage, error) {
 		return nil, types.NewWebxError(
 			types.ErrLoginRequired,
 			fmt.Sprintf("Twitter auth rejected (HTTP %d). Verify TWITTER_AUTH_TOKEN and TWITTER_CT0 are current.", resp.StatusCode),
-		)
+		), false
 	case http.StatusTooManyRequests:
-		return nil, types.NewWebxError(types.ErrRateLimited, "Twitter rate limited (HTTP 429)")
+		return nil, types.NewWebxError(types.ErrRateLimited, "Twitter rate limited (HTTP 429)"), false
 	case http.StatusNotFound, 422:
 		return nil, types.NewWebxError(
 			types.ErrAntiBot,
 			fmt.Sprintf("Twitter %s returned HTTP %d — queryId may be stale. Update from https://github.com/fa0311/twitter-openapi", req.Operation, resp.StatusCode),
-		)
+		), false
 	default:
-		return nil, types.NewWebxError(types.ErrFetchFailed, "unexpected Twitter HTTP status: "+resp.Status)
+		return nil, types.NewWebxError(types.ErrFetchFailed, "unexpected Twitter HTTP status: "+resp.Status), resp.StatusCode >= 500
 	}
 
 	var reader io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == "gzip" {
 		gzr, gzErr := gzip.NewReader(resp.Body)
 		if gzErr != nil {
-			return nil, types.NewWebxError(types.ErrBackendFailed, "failed to create gzip reader: "+gzErr.Error())
+			return nil, types.NewWebxError(types.ErrBackendFailed, "failed to create gzip reader: "+gzErr.Error()), false
 		}
 		defer gzr.Close()
 		reader = gzr
@@ -218,9 +259,9 @@ func doGraphQLGet(req graphQLRequest) (json.RawMessage, error) {
 	const maxTwitterBody = 10 * 1024 * 1024
 	body, err := io.ReadAll(io.LimitReader(reader, maxTwitterBody))
 	if err != nil {
-		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to read response body: "+err.Error())
+		return nil, types.NewWebxError(types.ErrFetchFailed, "failed to read response body: "+err.Error()), true
 	}
-	return json.RawMessage(body), nil
+	return json.RawMessage(body), nil, false
 }
 
 // buildGraphQLURL renders a GraphQL GET URL. Compact-features rule: drop false
