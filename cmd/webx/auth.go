@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/oaooao/webx/internal/auth"
+	twitterbe "github.com/oaooao/webx/internal/backends/twitter"
 	"github.com/spf13/cobra"
 )
 
@@ -57,12 +58,11 @@ func authAddTwitter(store *auth.FileStore) error {
 	}
 
 	fmt.Print("Testing... ")
-	username, err := verifyTwitter(authToken, ct0)
-	if err != nil {
+	if err := verifyTwitter(authToken, ct0); err != nil {
 		fmt.Println("failed")
 		return fmt.Errorf("credential test failed: %w", err)
 	}
-	fmt.Printf("authenticated as @%s\n", username)
+	fmt.Println("ok (read a tweet with these cookies)")
 
 	if err := store.Set("twitter", auth.PlatformAuth{
 		Type: "cookie",
@@ -208,12 +208,11 @@ var authTestCmd = &cobra.Command{
 
 		switch platform {
 		case "twitter":
-			username, err := verifyTwitter(pa.Credentials["auth_token"], pa.Credentials["ct0"])
-			if err != nil {
+			if err := verifyTwitter(pa.Credentials["auth_token"], pa.Credentials["ct0"]); err != nil {
 				fmt.Println("FAILED")
 				return fmt.Errorf("invalid: %w", err)
 			}
-			fmt.Printf("OK (authenticated as @%s)\n", username)
+			fmt.Println("OK (read a tweet through GraphQL TweetDetail)")
 		case "reddit":
 			username, err := verifyReddit(pa.Credentials["access_token"])
 			if err != nil {
@@ -231,48 +230,28 @@ var authTestCmd = &cobra.Command{
 
 // --- Verification helpers ---
 
-// verifyTwitter calls GET /1.1/account/verify_credentials.json and returns the screen_name.
-func verifyTwitter(authToken, ct0 string) (string, error) {
-	const verifyURL = "https://api.twitter.com/1.1/account/verify_credentials.json"
-	const bearerToken = "AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA"
+// verifyTwitterTweetID is the tweet a credential check reads: Twitter's
+// first public tweet, which has stayed up since 2006.
+const verifyTwitterTweetID = "20"
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, verifyURL, nil)
+// verifyTwitter checks the session cookies by making the same TweetDetail
+// GraphQL request `webx read` makes, through the same client. The REST
+// endpoint this used before (api.twitter.com/1.1/account/
+// verify_credentials.json) now answers 404 for every caller. Stale cookies
+// can get HTTP 200 with an empty timeline, so success requires tweets.
+func verifyTwitter(authToken, ct0 string) error {
+	raw, err := twitterbe.FetchTweetDetail(verifyTwitterTweetID, &twitterbe.Auth{AuthToken: authToken, CT0: ct0})
 	if err != nil {
-		return "", err
+		return err
 	}
-
-	req.Header.Set("Authorization", "Bearer "+bearerToken)
-	req.Header.Set("Cookie", "auth_token="+authToken+"; ct0="+ct0)
-	req.Header.Set("X-Csrf-Token", ct0)
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
-
-	resp, err := client.Do(req)
+	tweets, err := twitterbe.ParseTweetDetailResponse(raw)
 	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
+		return fmt.Errorf("failed to parse TweetDetail response: %w", err)
 	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
-
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return "", fmt.Errorf("HTTP %d: credentials rejected", resp.StatusCode)
+	if len(tweets) == 0 {
+		return fmt.Errorf("TweetDetail returned no tweets: the cookies are probably stale")
 	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("HTTP %d: unexpected status", resp.StatusCode)
-	}
-
-	var result struct {
-		ScreenName string `json:"screen_name"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("failed to parse response: %w", err)
-	}
-	if result.ScreenName == "" {
-		return "", fmt.Errorf("no screen_name in response")
-	}
-
-	return result.ScreenName, nil
+	return nil
 }
 
 // verifyReddit calls GET https://oauth.reddit.com/api/v1/me and returns the username.
