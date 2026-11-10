@@ -366,7 +366,7 @@ func TestParseTweetDetailResponse_CurrentFormat_Media(t *testing.T) {
 	if tw.Media[0].Type != "photo" {
 		t.Errorf("Media[0].Type: got %q, want %q", tw.Media[0].Type, "photo")
 	}
-	if tw.Media[0].URL != "https://pbs.twimg.com/media/test123.jpg" {
+	if tw.Media[0].URL != "https://pbs.twimg.com/media/test123.jpg?name=large" {
 		t.Errorf("Media[0].URL: got %q", tw.Media[0].URL)
 	}
 }

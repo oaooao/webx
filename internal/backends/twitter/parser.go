@@ -289,11 +289,15 @@ func parseTweetResult(resultRaw json.RawMessage) *Tweet {
 		}
 	}
 
+	links := newLinkSet()
+
 	// Tweet content from legacy.
 	if legacyRaw, ok := result["legacy"]; ok {
 		var legacy map[string]json.RawMessage
 		if json.Unmarshal(legacyRaw, &legacy) == nil {
 			parseLegacyIntoTweet(legacy, tweet)
+			links.collect(legacy["entities"])
+			links.collect(legacy["extended_entities"])
 		}
 	}
 
@@ -314,12 +318,15 @@ func parseTweetResult(resultRaw json.RawMessage) *Tweet {
 									tweet.IsNoteTweet = true
 								}
 							}
+							links.collect(nrResult["entity_set"])
 						}
 					}
 				}
 			}
 		}
 	}
+
+	tweet.Text = links.apply(tweet.Text)
 
 	// X Article (long-form Draft.js content) attached to the tweet.
 	if title, text := extractArticle(result); title != "" || text != "" {
@@ -392,9 +399,10 @@ func parseLegacyIntoTweet(legacy map[string]json.RawMessage, tweet *Tweet) {
 				var mediaList []map[string]json.RawMessage
 				if json.Unmarshal(mediaRaw, &mediaList) == nil {
 					for _, m := range mediaList {
+						mediaType := jsonString(m["type"])
 						media := Media{
-							Type: jsonString(m["type"]),
-							URL:  jsonString(m["media_url_https"]),
+							Type: mediaType,
+							URL:  largePhotoURL(mediaType, jsonString(m["media_url_https"])),
 						}
 						if media.URL != "" {
 							tweet.Media = append(tweet.Media, media)
