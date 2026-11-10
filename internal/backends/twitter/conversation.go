@@ -9,9 +9,13 @@ type Conversation struct {
 	// tweet (a "thread" in X terms), in reading order. They are body text,
 	// not comments.
 	Thread []Tweet
-	// Replies are everything else below the focal tweet, including the
-	// author's answers to other people.
+	// Replies are the other tweets below the focal tweet that belong to its
+	// conversation, including the author's answers to other people.
 	Replies []Tweet
+	// Unrelated are tweets X injects below the replies that are not part of
+	// the conversation (the "discover more" recommendations). They are kept
+	// apart so they are never presented as replies.
+	Unrelated []Tweet
 }
 
 // SplitConversation splits parsed TweetDetail tweets around focalID.
@@ -50,6 +54,23 @@ func SplitConversation(tweets []Tweet, focalID string) Conversation {
 		n++
 	}
 	c.Thread = rest[:n]
-	c.Replies = rest[n:]
+	for _, t := range rest[n:] {
+		if inConversation(t, c.Focal) {
+			c.Replies = append(c.Replies, t)
+		} else {
+			c.Unrelated = append(c.Unrelated, t)
+		}
+	}
 	return c
+}
+
+// inConversation reports whether t belongs to focal's conversation. X gives
+// every tweet a conversation_id (the id of the conversation's root tweet);
+// when both carry one, they must match. Without it, a reply is recognised by
+// replying to something: injected recommendations are standalone tweets.
+func inConversation(t, focal Tweet) bool {
+	if t.ConversationID != "" && focal.ConversationID != "" {
+		return t.ConversationID == focal.ConversationID
+	}
+	return t.InReplyToID != ""
 }

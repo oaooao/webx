@@ -122,6 +122,7 @@ func (a *twitterAdapter) fetchTweets(ctx types.RunContext, step string) (*thread
 	}
 
 	conv := twitterbe.SplitConversation(tweets, id)
+	tweets = withoutUnrelated(tweets, conv.Unrelated)
 
 	title := "Tweet"
 	if conv.Focal.Author.ScreenName != "" {
@@ -133,8 +134,8 @@ func (a *twitterAdapter) fetchTweets(ctx types.RunContext, step string) (*thread
 		Reason:  types.TraceRouteMatch,
 		Adapter: "twitter",
 		Backend: tr.backend,
-		Detail: fmt.Sprintf("parsed %d tweets (%d thread continuations, %d replies) from TweetDetail GraphQL response",
-			len(tweets), len(conv.Thread), len(conv.Replies)),
+		Detail: fmt.Sprintf("parsed %d tweets from TweetDetail GraphQL response: %d thread continuations, %d replies; dropped %d unrelated recommendations",
+			len(tweets)+len(conv.Unrelated), len(conv.Thread), len(conv.Replies), len(conv.Unrelated)),
 	})
 
 	// X Article enrichment: TweetDetail only returns {title, preview_text}
@@ -248,6 +249,25 @@ func readData(th *thread) TwitterReadData {
 		})
 	}
 	return data
+}
+
+// withoutUnrelated drops X's injected recommendations from the tweet list,
+// so Extract returns the same conversation Read renders.
+func withoutUnrelated(tweets, unrelated []twitterbe.Tweet) []twitterbe.Tweet {
+	if len(unrelated) == 0 {
+		return tweets
+	}
+	drop := make(map[string]bool, len(unrelated))
+	for _, t := range unrelated {
+		drop[t.ID] = true
+	}
+	kept := make([]twitterbe.Tweet, 0, len(tweets)-len(unrelated))
+	for _, t := range tweets {
+		if !drop[t.ID] {
+			kept = append(kept, t)
+		}
+	}
+	return kept
 }
 
 func authorOrI(t twitterbe.Tweet) string {

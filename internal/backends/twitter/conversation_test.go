@@ -110,3 +110,37 @@ func TestRenderArticleMarkdown(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitConversation_RecommendationsAreNotReplies(t *testing.T) {
+	inConv := func(tw Tweet) Tweet { tw.ConversationID = "1"; return tw }
+	rec := tw("50", "stranger", "", "unrelated viral tweet")
+	rec.ConversationID = "50"
+	recReply := tw("60", "other", "59", "a reply in some other conversation")
+	recReply.ConversationID = "59"
+	tweets := []Tweet{
+		inConv(tw("1", "neo", "", "focal")),
+		inConv(tw("10", "raul", "1", "real reply")),
+		inConv(tw("11", "neo", "10", "author answers raul")),
+		rec,
+		recReply,
+	}
+	c := SplitConversation(tweets, "1")
+	if got := ids(c.Replies); got != "10,11" {
+		t.Errorf("replies = %q, want 10,11", got)
+	}
+	if got := ids(c.Unrelated); got != "50,60" {
+		t.Errorf("unrelated = %q, want 50,60", got)
+	}
+}
+
+func TestSplitConversation_WithoutConversationIDsStandaloneTweetsAreUnrelated(t *testing.T) {
+	tweets := []Tweet{
+		tw("1", "neo", "", "focal"),
+		tw("10", "raul", "1", "reply"),
+		tw("50", "stranger", "", "recommendation"),
+	}
+	c := SplitConversation(tweets, "1")
+	if ids(c.Replies) != "10" || ids(c.Unrelated) != "50" {
+		t.Errorf("replies=%q unrelated=%q", ids(c.Replies), ids(c.Unrelated))
+	}
+}
