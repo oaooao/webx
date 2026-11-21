@@ -2,6 +2,7 @@ package reddit
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/oaooao/webx/internal/backends"
@@ -77,5 +78,42 @@ func TestRead_WhenDirectFailsOtherwise_DoesNotFallBack(t *testing.T) {
 	}
 	if _, err := New().Read(ctx); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+// Regression for 2026-11-21: reading a subreddit listing URL must return the
+// list of posts, not try to parse the listing as a single thread.
+func TestRead_SubredditListing_ReturnsPosts(t *testing.T) {
+	oldDirect, oldEgo := directFetch, egoliteFetch
+	t.Cleanup(func() { directFetch, egoliteFetch = oldDirect, oldEgo })
+	directFetch = func(string, ...string) ([]backends.RedditListing, error) {
+		return nil, types.NewWebxError(types.ErrLoginRequired, "Reddit returned 403")
+	}
+	egoliteFetch = func(string, ...string) ([]backends.RedditListing, error) {
+		var l backends.RedditListing
+		if err := json.Unmarshal([]byte(`{"kind":"Listing","data":{"children":[
+		 {"kind":"t3","data":{"title":"First post","author":"alice","subreddit":"ExperiencedDevs","permalink":"/r/ExperiencedDevs/comments/a/first_post/","score":512,"num_comments":88}},
+		 {"kind":"t3","data":{"title":"Second post","author":"bob","subreddit":"ExperiencedDevs","permalink":"/r/ExperiencedDevs/comments/b/second_post/","score":40,"num_comments":3}}]}}`), &l); err != nil {
+			t.Fatal(err)
+		}
+		return []backends.RedditListing{l}, nil
+	}
+	ctx := types.RunContext{
+		MatchContext: types.MatchContext{URL: mustParseURL(t, "https://www.reddit.com/r/ExperiencedDevs/top/?t=day")},
+		Trace:        types.NewTraceBuffer(),
+	}
+	res, err := New().Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, ok := res.Data.(RedditListingData)
+	if !ok {
+		t.Fatalf("Data is %T, want RedditListingData", res.Data)
+	}
+	if len(data.Posts) != 2 || data.Posts[1].Title != "Second post" {
+		t.Errorf("posts = %+v", data.Posts)
+	}
+	if res.Markdown == nil || !strings.Contains(*res.Markdown, "## 2. Second post") {
+		t.Errorf("markdown should list both posts: %v", res.Markdown)
 	}
 }

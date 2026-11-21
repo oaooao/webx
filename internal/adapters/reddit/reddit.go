@@ -76,10 +76,9 @@ type fetched struct {
 	fallbackDepth int
 }
 
-// fetchReddit is the shared core for Read and Extract. It fetches the thread
-// JSON directly, falls back to ego lite on 401/403, then parses the post and
-// comment tree.
-func (a *redditAdapter) fetchReddit(ctx types.RunContext, step string) (*fetched, error) {
+// fetchListings fetches the JSON for ctx.URL directly and falls back to ego
+// lite on 401/403. Shared by threads and listings.
+func (a *redditAdapter) fetchListings(ctx types.RunContext, step string) ([]backends.RedditListing, string, int, error) {
 	backend, depth := directBackend, 0
 	listings, err := directFetch(ctx.URL.String())
 	if err != nil {
@@ -91,7 +90,7 @@ func (a *redditAdapter) fetchReddit(ctx types.RunContext, step string) (*fetched
 			Detail:  err.Error(),
 		})
 		if !isLoginRequired(err) {
-			return nil, err
+			return nil, "", 0, err
 		}
 		backend, depth = egolite.BackendID, 1
 		listings, err = egoliteFetch(ctx.URL.String())
@@ -103,8 +102,18 @@ func (a *redditAdapter) fetchReddit(ctx types.RunContext, step string) (*fetched
 				Backend: backend,
 				Detail:  err.Error(),
 			})
-			return nil, err
+			return nil, "", 0, err
 		}
+	}
+	return listings, backend, depth, nil
+}
+
+// fetchReddit is the shared core for Read and Extract. It fetches the thread
+// JSON (see fetchListings), then parses the post and comment tree.
+func (a *redditAdapter) fetchReddit(ctx types.RunContext, step string) (*fetched, error) {
+	listings, backend, depth, err := a.fetchListings(ctx, step)
+	if err != nil {
+		return nil, err
 	}
 
 	result, parseErr := backends.ParseRedditListings(listings)
@@ -138,6 +147,9 @@ func (a *redditAdapter) fetchReddit(ctx types.RunContext, step string) (*fetched
 }
 
 func (a *redditAdapter) Read(ctx types.RunContext) (*types.NormalizedReadResult, error) {
+	if extractPostID(ctx.URL.Path) == "" {
+		return a.readListing(ctx)
+	}
 	result, err := a.fetchReddit(ctx, "adapter.read")
 	if err != nil {
 		return nil, err
@@ -450,3 +462,37 @@ func extractRedditThingID(rawURL string) string {
 	return ""
 }
 
+// RedditListingData is the structured data returned by Read for a subreddit
+// or front-page listing URL.
+type RedditListingData struct {
+	Posts []backends.RedditPost `json:"posts"`
+}
+
+// readListing reads a subreddit or front-page listing such as
+// /r/<sub>/top/?t=week: the posts in Reddit's order, with their links.
+func (a *redditAdapter) readListing(ctx types.RunContext) (*types.NormalizedReadResult, error) {
+	listings, backend, depth, err := a.fetchListings(ctx, "adapter.read")
+	if err != nil {
+		return nil, err
+	}
+	posts := backends.ParseRedditPostListing(listings)
+	ctx.Trace.Push(types.TraceEvent{
+		Step:    "adapter.read",
+		Reason:  types.TraceRouteMatch,
+		Adapter: "reddit",
+		Backend: backend,
+		Detail:  fmt.Sprintf("parsed %d posts from listing", len(posts)),
+	})
+	title := strings.Trim(ctx.URL.Path, "/")
+	if title == "" {
+		title = "Reddit"
+	}
+	markdown := backends.RenderRedditPostListingMarkdown(title, posts)
+	return &types.NormalizedReadResult{
+		Title:         types.StringPtr(title),
+		Markdown:      &markdown,
+		Data:          RedditListingData{Posts: posts},
+		Backend:       backend,
+		FallbackDepth: depth,
+	}, nil
+}

@@ -1,6 +1,7 @@
 package backends
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -167,7 +168,16 @@ func doRedditFetch(jsonURL string) ([]RedditListing, error) {
 	return decodeRedditListings(body)
 }
 
+// decodeRedditListings decodes a thread's [post, comments] pair, or a
+// subreddit listing's single Listing object as a one-element slice.
 func decodeRedditListings(body []byte) ([]RedditListing, error) {
+	if trimmed := bytes.TrimSpace(body); len(trimmed) > 0 && trimmed[0] == '{' {
+		var l RedditListing
+		if err := json.Unmarshal(trimmed, &l); err != nil {
+			return nil, types.NewWebxError(types.ErrBackendFailed, "Reddit returned invalid JSON: "+err.Error())
+		}
+		return []RedditListing{l}, nil
+	}
 	var listings []RedditListing
 	if err := json.Unmarshal(body, &listings); err != nil {
 		return nil, types.NewWebxError(types.ErrBackendFailed, "Reddit returned invalid JSON: "+err.Error())
