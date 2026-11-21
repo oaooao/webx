@@ -53,7 +53,7 @@ var searchCmd = &cobra.Command{
 }
 
 func init() {
-	searchCmd.Flags().StringVar(&searchPlatform, "platform", "", "Platform to search (twitter, reddit, hacker-news, youtube)")
+	searchCmd.Flags().StringVar(&searchPlatform, "platform", "", "Platform to search (twitter, reddit, hacker-news or hn, youtube)")
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 20, "Maximum number of results")
 	searchCmd.Flags().StringVar(&searchSort, "sort", "relevance", "Sort order: relevance, recent, top")
 	searchCmd.Flags().StringVar(&searchFormat, "format", "json", "Output format: json, markdown")

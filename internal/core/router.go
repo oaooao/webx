@@ -36,9 +36,18 @@ func Route(ctx types.MatchContext) types.Adapter {
 	return nil
 }
 
-// FindAdapter returns the adapter with the given ID, or nil if not found.
-// Used by search (and future operations) that route by platform ID rather than URL.
+// platformAliases maps short platform names to adapter IDs.
+var platformAliases = map[string]string{
+	"hn": "hacker-news",
+}
+
+// FindAdapter returns the adapter with the given ID or alias, or nil if not
+// found. Used by search (and future operations) that route by platform ID
+// rather than URL.
 func FindAdapter(platformID string) types.Adapter {
+	if id, ok := platformAliases[platformID]; ok {
+		platformID = id
+	}
 	for _, adapter := range registry {
 		if adapter.ID() == platformID {
 			return adapter

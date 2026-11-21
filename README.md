@@ -39,7 +39,7 @@ There is no LLM in the loop. Output is deterministic, a read takes from a few hu
 | X / Twitter | `twitter` | Tweet text, author, metrics, the author's thread continuations, first page of replies; full X Articles from `/i/article/` links | Yes, unless you [store tokens](#optional-direct-access-with-your-own-tokens). `/i/article/` links always need ego lite |
 | Reddit | `reddit` | Post plus the nested comment tree | Only when Reddit rejects the direct request (403), which is common |
 | YouTube | `youtube` | Title, channel, description, transcript when captions exist | No |
-| Hacker News | `hacker-news` | Post plus comment tree | No |
+| Hacker News | `hacker-news` (alias `hn`) | Post plus comment tree | No |
 | arXiv | `arxiv` | Title, authors, abstract | No |
 | Claude share links | `claude` | Conversation as structured messages | No |
 | ChatGPT share links | `chatgpt` | Conversation as structured messages | No |
@@ -288,7 +288,7 @@ When `ok` is `false`, `error.code` is one of these.
 | `FETCH_FAILED` | Network error or an unexpected HTTP status. | Check connectivity and proxy settings (see [Troubleshooting](#troubleshooting)); the message carries the underlying error. |
 | `FETCH_TIMEOUT` | The site, or ego lite, did not answer in time. | Retry. If the message mentions ego lite, make sure the app is open. |
 | `TLS_BLOCKED` | The TLS handshake with X failed. | Usually a network or proxy problem; retry on another network, or rely on the ego lite path by not storing tokens. |
-| `NO_MATCH` | No adapter matches the URL, the URL is malformed, or the `--platform` name is unknown. | Check the URL; search platforms are `twitter`, `reddit`, `hacker-news`, `youtube`. |
+| `NO_MATCH` | No adapter matches the URL, the URL is malformed, or the `--platform` name is unknown. | Check the URL; search platforms are `twitter`, `reddit`, `hacker-news` (or `hn`), `youtube`. |
 | `UNSUPPORTED_KIND` | The adapter cannot do what you asked, for example `extract` or `search` on a site that does not support it. | Use `webx read` instead. |
 | `BACKEND_FAILED` | webx received a response it could not parse. The site probably changed its format. | Update webx; if it persists, open an issue with the `trace`. |
 | `BACKEND_UNAVAILABLE`, `PARTIAL_CONTENT` | Reserved for features that are not implemented or results that are incomplete. | Open an issue if you see one. |

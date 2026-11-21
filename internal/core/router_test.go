@@ -168,3 +168,16 @@ func TestFindAdapter_WhenEmptyRegistry_ShouldReturnNil(t *testing.T) {
 		t.Fatalf("expected nil for empty registry, got %s", got.ID())
 	}
 }
+
+// Regression for 2026-11-21: the webx skill told agents to run
+// `webx search ... --platform hn`, which failed with
+// "NO_MATCH: Unknown platform: hn". hn is an alias of hacker-news.
+func TestFindAdapter_WhenAlias_ShouldReturnCanonicalAdapter(t *testing.T) {
+	ResetRegistry()
+	RegisterAdapter(&mockAdapter{id: "hacker-news", priority: 90, kinds: []types.WebxKind{types.KindThread}, hostname: "news.ycombinator.com"})
+
+	got := FindAdapter("hn")
+	if got == nil || got.ID() != "hacker-news" {
+		t.Fatalf("FindAdapter(\"hn\") = %v, want the hacker-news adapter", got)
+	}
+}
