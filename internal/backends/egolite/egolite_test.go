@@ -54,7 +54,7 @@ func TestBuildScript_EmbedsJobAsJSONLiteral(t *testing.T) {
 	if back.Requests[0].Body != job.Requests[0].Body {
 		t.Errorf("body round-trip: got %q", back.Requests[0].Body)
 	}
-	for _, want := range []string{`taskSpace("webx")`, `waitUntil: "domcontentloaded"`, "Network.getCookies", "page.close()"} {
+	for _, want := range []string{`pickSpace(spaces, "webx")`, `waitUntil: "domcontentloaded"`, "Network.getCookies", "page.close()"} {
 		if !strings.Contains(script, want) {
 			t.Errorf("script missing %q", want)
 		}

@@ -28,10 +28,66 @@ import (
 // through this transport.
 const BackendID = "egolite"
 
-// SpaceName is the fixed ego lite TaskSpace every webx run reuses. Each run
-// opens its own Page in the space and closes it when done, so concurrent runs
-// do not navigate each other's Page.
+// SpaceName is the ego lite TaskSpace every webx run reuses while the agent
+// holds it; when the user holds it, runs move to webx-2, webx-3, ... (see
+// pickSpaceJS). Each run opens its own Page in the space and closes it when
+// done, so concurrent runs do not navigate each other's Page.
 const SpaceName = "webx"
+
+// pickSpaceJS chooses the TaskSpace for a run from listTaskSpaces(). A
+// space keeps its name after ego lite hands it to the user (a permission
+// prompt, for example), and taskSpace(name) on it then fails on every run
+// with "The user now controls this task space" (2026-11-21: space "webx",
+// id 3, stuck in agentDelegatedToUser). So only a space the agent holds, or
+// a free name, is used: webx, then webx-2, webx-3, ... The skipped spaces
+// are left alone for the user and reported back.
+const pickSpaceJS = `const pickSpace = (spaces, base) => {
+  const skipped = [];
+  for (let i = 1; ; i++) {
+    const name = i === 1 ? base : base + "-" + i;
+    const s = spaces.find((x) => x.name === name);
+    if (!s || s.ownership === "agent") return { name, skipped };
+    skipped.push({ name, id: s.id, ownership: s.ownership });
+  }
+};`
+
+// spacePrelude opens the run's TaskSpace as task. It sets pick, which the
+// script reports back with every result.
+const spacePrelude = pickSpaceJS + `
+const spaces = typeof listTaskSpaces === "function" ? await listTaskSpaces() : [];
+pick = pickSpace(spaces, "` + SpaceName + `");
+const task = await taskSpace(pick.name);`
+
+// SpaceUse is the space a run used and the spaces it skipped.
+type SpaceUse struct {
+	Name    string         `json:"name"`
+	Skipped []SkippedSpace `json:"skipped"`
+}
+
+// SkippedSpace is a space with one of our names that the agent does not
+// hold (ownership "user" or "agentDelegatedToUser").
+type SkippedSpace struct {
+	Name      string `json:"name"`
+	ID        int    `json:"id"`
+	Ownership string `json:"ownership"`
+}
+
+// Notify receives one-line notices for the caller, such as a space left
+// waiting for the user. The default writes to stderr so stdout stays the
+// JSON or Markdown result. Tests replace it.
+var Notify = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
+
+func reportSpace(use *SpaceUse) {
+	if use == nil || len(use.Skipped) == 0 {
+		return
+	}
+	held := make([]string, 0, len(use.Skipped))
+	for _, s := range use.Skipped {
+		held = append(held, fmt.Sprintf("%q (id %d, %s)", s.Name, s.ID, s.Ownership))
+	}
+	Notify(fmt.Sprintf("webx: ego lite task space %s is waiting for the user; this run used %q. Leave it for the user to resolve in ego lite.",
+		strings.Join(held, ", "), use.Name))
+}
 
 // resultMarker prefixes the single output line that carries the run result.
 // Anything else in the output (ego-browser notices, stray logs) is ignored.
@@ -95,6 +151,7 @@ type Timing struct {
 // scriptOutput is the JSON payload after resultMarker.
 type scriptOutput struct {
 	OK     bool         `json:"ok"`
+	Space  *SpaceUse    `json:"space,omitempty"`
 	Error  *scriptError `json:"error,omitempty"`
 	Result *Result      `json:"result,omitempty"`
 }
@@ -137,6 +194,7 @@ func RunWith(ctx context.Context, runner Runner, job Job) (*Result, error) {
 		// reachable, or the runtime crashed before our try/catch.
 		return nil, classifyProcessFailure(ctx, job, stdout, stderr, runErr, parseErr)
 	}
+	reportSpace(out.Space)
 	if !out.OK {
 		return nil, scriptFailure(job, out.Error)
 	}
@@ -189,11 +247,12 @@ func BuildScript(job Job) (string, error) {
 //   - the process cwd is "/" (read-only), so nothing is written to disk.
 const scriptTemplate = `const job = __JOB__;
 const MARK = "` + resultMarker + `";
-const emit = (o) => console.log(MARK + JSON.stringify(o));
+let pick = null;
+const emit = (o) => console.log(MARK + JSON.stringify({ ...o, space: pick }));
 const t0 = Date.now();
 let page = null;
 try {
-  const task = await taskSpace("` + SpaceName + `");
+` + spacePrelude + `
   page = await task.newPage();
   const t1 = Date.now();
   try {
@@ -270,6 +329,11 @@ func scriptFailure(job Job, se *scriptError) error {
 	if se == nil {
 		return types.NewWebxError(types.ErrBackendFailed, "egolite: script failed without detail")
 	}
+	if strings.Contains(se.Message, "controls this task space") {
+		return types.NewWebxError(types.ErrBackendFailed, fmt.Sprintf(
+			"The ego lite task space was handed to the user during this run (%s). Retry: the next run leaves that space to the user and opens a new space.",
+			firstLine(se.Message)))
+	}
 	switch se.Kind {
 	case "login":
 		return types.NewWebxError(types.ErrLoginRequired, fmt.Sprintf(
@@ -277,9 +341,8 @@ func scriptFailure(job Job, se *scriptError) error {
 	case "goto":
 		return types.NewWebxError(types.ErrFetchFailed, fmt.Sprintf(
 			"ego lite could not open %s: %s", job.Origin, se.Message))
-	default:
-		return types.NewWebxError(types.ErrBackendFailed, "egolite script error: "+se.Message)
 	}
+	return types.NewWebxError(types.ErrBackendFailed, "egolite script error: "+se.Message)
 }
 
 // exitConnectFailed is the ego-browser exit code when it cannot reach the

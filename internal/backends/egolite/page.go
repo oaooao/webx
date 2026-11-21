@@ -42,6 +42,7 @@ type Page struct {
 
 type pageOutput struct {
 	OK     bool         `json:"ok"`
+	Space  *SpaceUse    `json:"space,omitempty"`
 	Error  *scriptError `json:"error,omitempty"`
 	Result *Page        `json:"result,omitempty"`
 }
@@ -70,6 +71,7 @@ func RenderPageWith(ctx context.Context, runner Runner, job PageJob) (*Page, err
 	if err := json.Unmarshal(line, &out); err != nil {
 		return nil, classifyProcessFailure(ctx, jobInfo, stdout, stderr, runErr, fmt.Errorf("invalid result JSON: %w", err))
 	}
+	reportSpace(out.Space)
 	if !out.OK {
 		return nil, scriptFailure(jobInfo, out.Error)
 	}
@@ -96,11 +98,12 @@ func BuildPageScript(job PageJob) (string, error) {
 // client-side redirects without depending on the "load" event.
 const pageScriptTemplate = `const job = __JOB__;
 const MARK = "` + resultMarker + `";
-const emit = (o) => console.log(MARK + JSON.stringify(o));
+let pick = null;
+const emit = (o) => console.log(MARK + JSON.stringify({ ...o, space: pick }));
 const t0 = Date.now();
 let page = null;
 try {
-  const task = await taskSpace("` + SpaceName + `");
+` + spacePrelude + `
   page = await task.newPage();
   const t1 = Date.now();
   try {
